@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dreamspace"
+version = "0.2.0"
+description = "Image to 3D: single objects today, whole rooms next."
+requires-python = ">=3.10"
+readme = "README.md"
+
+# requirements.txt stays the single source of truth. It carries the reasoning
+# behind every ceiling (transformers <5, numpy <2) and setup.ps1 installs from
+# it directly, so duplicating the list here would guarantee the two drift apart.
+dynamic = ["dependencies"]
+
+[project.scripts]
+dreamspace-generate = "dreamspace.cli.generate:main"
+dreamspace-room = "dreamspace.cli.room:main"
+dreamspace-assemble = "dreamspace.cli.assemble:main"
+dreamspace-view = "dreamspace.cli.view:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# build_scene.py is executed by Blender's own interpreter, never imported by
+# ours, but it still has to ship inside the package so assemble.py can find it
+# on disk next to the module that launches it.
+[tool.setuptools.package-data]
+"dreamspace.scene.blender" = ["*.py"]

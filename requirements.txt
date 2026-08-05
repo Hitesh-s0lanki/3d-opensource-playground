@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# torch/torchvision MUST come from the PyTorch CUDA index, not PyPI.
+# setup.ps1 installs them first with an explicit --index-url; they are listed
+# here unpinned so this file does not downgrade them to a CPU build.
+#
+#   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# ---------------------------------------------------------------------------
+torch
+torchvision
+
+# --- TripoSR runtime -------------------------------------------------------
+omegaconf>=2.3.0
+einops>=0.7.0
+
+# transformers MUST stay on 4.x.
+# TripoSR's image tokenizer is a DINOv2 ViT and its checkpoint was saved with
+# the 4.x parameter names (encoder.layer.N.attention.attention.query). The v5
+# modeling refactor renamed these to layers.N.attention.q_proj, so loading the
+# checkpoint under v5 fails with several hundred missing/unexpected keys.
+# Upstream pins ==4.35.0; the 4.x ceiling is the actual constraint.
+transformers>=4.35.0,<5.0
+
+# transformers 4.x requires the pre-1.0 hub client, so this ceiling follows.
+huggingface-hub>=0.25.0,<1.0
+safetensors>=0.4.0
+trimesh>=4.0.5
+xatlas>=0.0.9
+moderngl>=5.10.0            # texture baking rasteriser
+imageio[ffmpeg]>=2.34.0
+Pillow>=10.1.0
+
+# PyMCubes replaces TripoSR's `torchmcubes` dependency.
+# torchmcubes builds a CUDA extension from source and needs the full CUDA
+# Toolkit (nvcc). PyMCubes ships prebuilt wheels, needs no compiler, and is the
+# library torchmcubes was ported from - same algorithm, same call signature.
+PyMCubes>=0.1.4
+
+# --- preprocessing ---------------------------------------------------------
+rembg>=2.0.50
+onnxruntime>=1.17.0         # swap for onnxruntime-gpu only if you free up VRAM
+
+# --- CLI / config ----------------------------------------------------------
+python-dotenv>=1.0.0
+rich>=13.7.0
+
+# numpy 2.x breaks rembg, xatlas and several TripoSR paths. Keep it pinned back.
+numpy<2.0

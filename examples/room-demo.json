@@ -1,0 +1,27 @@
+{
+  "name": "room-demo",
+  "schema_version": 1,
+  "room": {
+    "width": 4.2,
+    "depth": 3.6,
+    "height": 2.7,
+    "wall_thickness": 0.1,
+    "with_ceiling": false
+  },
+  "objects": [
+    {
+      "name": "chair",
+      "mesh": "outputs/chair.glb",
+      "position": [-1.2, 0.4, 0.0],
+      "size": [0.55, 0.55, 0.9],
+      "rotation_z": 25.0
+    },
+    {
+      "name": "teapot",
+      "mesh": "outputs/teapot.glb",
+      "position": [0.8, -0.6, 0.75],
+      "size": [0.24, 0.18, 0.16],
+      "rotation_z": 0.0
+    }
+  ]
+}
