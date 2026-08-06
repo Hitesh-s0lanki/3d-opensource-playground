@@ -4,6 +4,11 @@ Turn a photo into 3D — a single object, or a whole room — running locally on
 
 Built around the constraints of this machine: **RTX 3050 Laptop, 4 GB VRAM, no CUDA Toolkit installed.**
 
+Deeper notes live in [docs/](docs/): [architecture](docs/architecture.md) ·
+[status](docs/status.md) · [testing](docs/testing.md) ·
+[decisions](docs/decisions.md) · [roadmap](docs/roadmap.md) ·
+[model landscape](docs/models.md)
+
 ## Setup
 
 ```powershell
