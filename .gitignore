@@ -13,3 +13,4 @@ dist/
 *.obj
 *.ckpt
 *.safetensors
+.playwright/

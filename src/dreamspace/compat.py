@@ -14,11 +14,25 @@ def install_torchmcubes_shim() -> str:
     full CUDA Toolkit (nvcc) - not just the runtime bundled with the driver.
     On a machine without the Toolkit it cannot be installed at all.
 
-    torchmcubes is a GPU port of PyMCubes and keeps its call signature, return
-    order and vertex/face conventions, so PyMCubes is a drop-in stand-in. The
-    only cost is that extraction runs on CPU, which is a rounding error next to
-    the transformer forward pass - and on a 4 GB card it is arguably a win,
-    since it keeps the density grid off the GPU.
+    torchmcubes is a GPU port of PyMCubes and keeps its call signature, but it
+    does *not* keep its vertex or face conventions. Two differences have to be
+    corrected here, or the shim silently produces a mirrored mesh:
+
+    * Axis order. PyMCubes returns vertices in array-index order ``(i, j, k)``;
+      torchmcubes returns them reversed, ``(k, j, i)``. TripoSR compensates for
+      torchmcubes in ``tsr/models/isosurface.py`` with ``v_pos[..., [2, 1, 0]]``.
+      Feeding it index-order vertices makes that line *introduce* the swap
+      instead of undoing it, reflecting the model across the x=z plane - which
+      reads as a 90-degree rotation plus a mirror.
+    Faces need no adjustment. Reversing the axes here and TripoSR's swizzle are
+    both reflections, so they cancel: the net transform is the identity and
+    PyMCubes' own winding survives intact. (This is why FLIP_FACES is not needed
+    once the axis order is right - the inside-out mesh was a *symptom* of the
+    reflection, not an independent quirk of TripoSR.)
+
+    The only remaining cost is that extraction runs on CPU, which is a rounding
+    error next to the transformer forward pass - and on a 4 GB card it is
+    arguably a win, since it keeps the density grid off the GPU.
 
     Returns a short string describing which implementation is active.
     """
@@ -48,6 +62,10 @@ def install_torchmcubes_shim() -> str:
         grid = np.ascontiguousarray(grid, dtype=np.float64)
 
         verts, faces = mcubes.marching_cubes(grid, float(threshold))
+
+        # Match torchmcubes' vertex convention - see the docstring above.
+        verts = verts[:, ::-1]
+
         return (
             torch.from_numpy(np.ascontiguousarray(verts)).float(),
             torch.from_numpy(np.ascontiguousarray(faces)).long(),

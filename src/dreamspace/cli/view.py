@@ -1,75 +1,42 @@
 #!/usr/bin/env python
-"""Preview every generated mesh in a browser.
+"""Inspect every generated mesh in a browser, next to what produced it - and
+start new ones from the same page.
 
-    dreamspace-view                 # serve ./outputs on http://localhost:8000
-    dreamspace-view --dir outputs   # explicit directory
+    dreamspace-view                    # serve ./outputs on http://localhost:8000
+    dreamspace-view --dir outputs      # explicit directory
+    dreamspace-view --inputs inputs    # where the source photos live
     dreamspace-view --port 8080
+    dreamspace-view --no-generate      # read-only: no running the pipeline
 
 Serving over HTTP rather than opening a file:// page is deliberate - browsers
 block a local page from fetching a local .glb as a cross-origin request, so
-double-clicking an HTML file would show empty viewers.
+double-clicking an HTML file would show an empty viewport.
+
+The page lives in viewer/index.html, the run graph is assembled in runs.py and
+the pipeline is driven from jobs.py; this module wires them together and streams
+bytes. It binds to 127.0.0.1 only, which matters rather more now that a POST to
+it starts a subprocess.
 """
 
 from __future__ import annotations
 
 import argparse
-import html
+import json
+import mimetypes
 import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
-PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Generated meshes</title>
-<script type="module"
-  src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
-<style>
-  :root {{ color-scheme: dark; }}
-  body {{ margin:0; padding:24px; background:#0d0d10; color:#e8e8ea;
-         font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }}
-  h1 {{ font-size:18px; font-weight:600; margin:0 0 4px; }}
-  p.sub {{ margin:0 0 24px; color:#8a8a94; }}
-  .grid {{ display:grid; gap:18px;
-           grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }}
-  .card {{ background:#17171c; border:1px solid #26262e; border-radius:12px;
-           overflow:hidden; }}
-  .hd {{ display:flex; justify-content:space-between; align-items:baseline;
-         padding:11px 14px; border-bottom:1px solid #26262e; }}
-  .hd b {{ font-weight:600; }}
-  .hd span {{ color:#8a8a94; font-size:12px; }}
-  model-viewer {{ width:100%; height:340px; background:#0d0d10; }}
-  .empty {{ color:#8a8a94; padding:40px 0; }}
-</style></head>
-<body>
-<h1>Generated meshes</h1>
-<p class="sub">{count} file(s) in <code>{where}</code> &middot; drag to orbit, scroll to zoom</p>
-<div class="grid">{cards}</div>
-</body></html>
-"""
+from .jobs import JobRunner, store_upload
+from .runs import discover
 
-CARD = """<div class="card">
-  <div class="hd"><b>{name}</b><span>{size:.1f} MB</span></div>
-  <model-viewer src="{src}" camera-controls auto-rotate
-                shadow-intensity="1" exposure="1"
-                environment-image="neutral" ar></model-viewer>
-</div>"""
+PAGE = Path(__file__).with_name("viewer") / "index.html"
 
-
-def build_page(root: Path) -> str:
-    files = sorted(root.rglob("*.glb")) + sorted(root.rglob("*.gltf"))
-    if not files:
-        cards = ('<p class="empty">No .glb files yet &mdash; run '
-                 '<code>dreamspace-generate --image inputs\\</code> first.</p>')
-    else:
-        cards = "".join(
-            CARD.format(
-                name=html.escape(f.relative_to(root).as_posix()),
-                size=f.stat().st_size / 1e6,
-                src="/" + f.relative_to(root).as_posix(),
-            )
-            for f in files
-        )
-    return PAGE.format(count=len(files), where=html.escape(str(root)), cards=cards)
+# The source photos are not under the served directory, so they get their own
+# mount rather than a second server.
+INPUTS_PREFIX = "/_inputs/"
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -81,42 +48,159 @@ class Handler(SimpleHTTPRequestHandler):
         ".gltf": "model/gltf+json",
     }
 
-    def do_GET(self):  # noqa: N802
-        if self.path in ("/", "/index.html"):
-            body = build_page(Path(self.directory)).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+    inputs_dir: Path = Path("inputs")
+    runner: JobRunner | None = None          # None when --no-generate
+
+    def _send(self, body: bytes, content_type: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # The page polls for new results, so a cached listing would hide them.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, payload, status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        if status != 200:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            # Rebuild on every load so new meshes appear on refresh.
-            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
+        self._send(body, "application/json; charset=utf-8")
+
+    def _send_input(self, name: str) -> None:
+        """Serve one file from the inputs directory."""
+        target = (self.inputs_dir / unquote(name)).resolve()
+        # A URL is not allowed to walk out of the directory it addresses.
+        if not target.is_file() or self.inputs_dir not in target.parents:
+            self.send_error(404, "no such input")
+            return
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        try:
+            self._send(target.read_bytes(), kind)
+        except OSError as exc:
+            self.send_error(500, str(exc))
+
+    def do_GET(self):  # noqa: N802
+        path = urlparse(self.path).path
+
+        if path in ("/", "/index.html"):
+            try:
+                self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
+            except OSError as exc:
+                self.send_error(500, f"viewer page missing: {exc}")
+            return
+
+        if path == "/api/runs":
+            root = Path(self.directory)
+            payload = {
+                "root": str(root),
+                "inputs": str(self.inputs_dir),
+                "can_generate": self.runner is not None,
+                "runs": discover(root, self.inputs_dir),
+            }
+            self._json(payload)
+            return
+
+        if path == "/api/jobs":
+            self._json({"jobs": self.runner.snapshot() if self.runner else []})
+            return
+
+        if path.startswith(INPUTS_PREFIX):
+            self._send_input(path[len(INPUTS_PREFIX):])
+            return
+
         super().do_GET()
+
+    # -- starting work ------------------------------------------------------
+    def do_POST(self):  # noqa: N802
+        parsed = urlparse(self.path)
+        path, query = parsed.path, parse_qs(parsed.query)
+
+        if self.runner is None:
+            self._json({"error": "generation is disabled (--no-generate)"}, 403)
+            return
+
+        if path == "/api/generate":
+            self._start_job(query)
+            return
+
+        if path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            job_id = path[len("/api/jobs/"):-len("/cancel")]
+            ok = self.runner.cancel(unquote(job_id))
+            self._json({"cancelled": ok}, 200 if ok else 409)
+            return
+
+        self.send_error(404, "no such endpoint")
+
+    def _start_job(self, query: dict) -> None:
+        """Take an uploaded image and queue the pipeline against it.
+
+        The body is the raw image rather than a multipart form: there is exactly
+        one file and no other fields, and `fetch(url, {body: file})` sends that
+        shape natively - which is a better trade than a multipart parser here.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length:
+            self._json({"error": "no image in the request body"}, 400)
+            return
+        data = self.rfile.read(length)
+
+        kind = (query.get("kind") or ["object"])[0]
+        filename = self.headers.get("X-Filename") or (query.get("name") or ["upload.png"])[0]
+        options = {k: v[0] for k, v in query.items() if k not in ("kind", "name")}
+
+        try:
+            stored = store_upload(self.inputs_dir, unquote(filename), data)
+            job = self.runner.submit(kind, stored, options)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 400)
+            return
+
+        self._json({"job": job.snapshot()})
 
     def log_message(self, *args):  # keep the console quiet
         pass
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Preview generated meshes in a browser.")
+    ap = argparse.ArgumentParser(
+        description="Inspect generated meshes, and what produced them, in a browser.")
     ap.add_argument("--dir", type=Path, default=Path("outputs"))
+    ap.add_argument("--inputs", type=Path,
+                    help="Source images. Defaults to a sibling 'inputs' folder.")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--no-generate", action="store_true",
+                    help="Browse only. Without it, the page can upload an image "
+                         "and run the pipeline on it.")
     args = ap.parse_args()
 
     root = args.dir.resolve()
     if not root.is_dir():
         print(f"No such directory: {root}")
         return 1
+    inputs = (args.inputs.resolve() if args.inputs else root.parent / "inputs")
 
+    runs = discover(root, inputs)
+    meshes = sum(1 for r in runs if r["render"]) + \
+        sum(1 for r in runs for i in r["items"] if i.get("mesh"))
     url = f"http://localhost:{args.port}"
-    print(f"Serving {root}\n  {url}\n\nRefresh the page after a new run. Ctrl+C to stop.")
+    print(f"Serving {root}\n  {len(runs)} run(s), {meshes} mesh(es)"
+          f"{'' if inputs.is_dir() else '  [no inputs/ found]'}\n"
+          f"  generation {'off (--no-generate)' if args.no_generate else 'on'}"
+          f" - uploads land in {inputs}\n  {url}\n\n"
+          "New runs appear on their own. Ctrl+C to stop.")
     if not args.no_open:
         webbrowser.open(url)
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port),
-                                 partial(Handler, directory=str(root)))
+    handler = partial(Handler, directory=str(root))
+    Handler.inputs_dir = inputs
+    Handler.runner = None if args.no_generate else JobRunner(root, inputs)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

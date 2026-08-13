@@ -225,17 +225,22 @@ def estimate_layout(
     """Build a SceneSpec from detections.
 
     `items` is an iterable of (name, box, mesh_path) where box is the pixel
-    (x0, y0, x1, y1) from segmentation.
+    (x0, y0, x1, y1) from segmentation, optionally with a fourth element: a
+    SourceSpec recording which patch of the photo the object came from. It is
+    carried through untouched - placement never depends on it - so callers with
+    nothing to say about provenance can keep passing three-tuples.
     """
     camera = camera or Camera()
     width, height = image_size
     focal = camera.focal_px(width)
     horizon_v = height / 2.0 + math.tan(math.radians(camera.pitch_deg)) * focal
 
-    placed = []          # (name, mesh, prior, lateral, forward)
-    mounted = []         # (name, mesh, prior, lateral, z)
+    placed = []          # (name, mesh, prior, lateral, forward, source)
+    mounted = []         # (name, mesh, prior, lateral, z, source)
 
-    for obj_name, box, mesh in items:
+    for item in items:
+        obj_name, box, mesh = item[:3]
+        source = item[3] if len(item) > 3 else None
         x0, y0, x1, y1 = box
         u = (x0 + x1) / 2.0
         prior = lookup_prior(obj_name)
@@ -250,7 +255,7 @@ def estimate_layout(
             # A single bad box should not stretch the room to the horizon.
             depth = min(depth, max_depth)
             lateral = (u - width / 2.0) * depth / focal
-            placed.append((obj_name, mesh, prior, lateral, depth))
+            placed.append((obj_name, mesh, prior, lateral, depth, source))
             continue
 
         # Wall and ceiling items get their height from where they sit in frame,
@@ -260,7 +265,7 @@ def estimate_layout(
         centre_v = (y0 + y1) / 2.0
         z = room_height * (1.0 - centre_v / height)
         lateral = (u - width / 2.0) / (width / 2.0)     # -1 .. +1 across frame
-        mounted.append((obj_name, mesh, prior, lateral, z))
+        mounted.append((obj_name, mesh, prior, lateral, z, source))
 
     # Size the room around what landed on the floor, counting each object's
     # footprint rather than just its centre. Sizing on centres alone lets a bed
@@ -283,19 +288,20 @@ def estimate_layout(
     y_centre = (near + far) / 2.0
 
     objects = []
-    for obj_name, mesh, prior, lateral, forward in placed:
+    for obj_name, mesh, prior, lateral, forward, source in placed:
         objects.append(ObjectSpec(
             name=obj_name,
             mesh=str(mesh),
             position=(_mm(lateral), _mm(forward - y_centre), 0.0),
             size=prior.size,
+            source=source,
         ))
 
     if isinstance(walls, str):
         walls = _auto_walls(mounted) if walls == "auto" else (walls,)
 
     inset = 0.02          # sit just clear of the wall, avoiding z-fighting
-    for obj_name, mesh, prior, lateral, z in mounted:
+    for obj_name, mesh, prior, lateral, z, source in mounted:
         if prior.mount == CEILING:
             objects.append(ObjectSpec(
                 name=obj_name,
@@ -303,6 +309,7 @@ def estimate_layout(
                 position=(_mm(lateral * room_width / 2.0 * 0.8), 0.0,
                           _mm(room_height - prior.size[2])),
                 size=prior.size,
+                source=source,
             ))
             continue
 
@@ -323,6 +330,7 @@ def estimate_layout(
             size=prior.size,
             rotation_z=yaw,
             kind="billboard" if prior.flat else "mesh",
+            source=source,
         ))
 
     spec = SceneSpec(

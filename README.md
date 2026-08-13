@@ -65,7 +65,57 @@ See [examples/room-demo.json](examples/room-demo.json) for a hand-written one.
 dreamspace-view          # serves outputs/ at http://localhost:8000
 ```
 
-Orbit with the mouse, scroll to zoom. Refresh after a new run. It runs a server rather than opening an HTML file because browsers block a `file://` page from fetching a local `.glb` cross-origin — double-clicking an HTML file gives you empty viewers.
+A three.js inspector organised around **runs**, not files. One room job scatters itself across four places — the photo in `inputs/`, crops and per-object meshes under `outputs/<name>/`, the placement in `scene.json`, the finished GLB at `outputs/<name>.glb` — and the viewer walks that naming convention back into one thing:
+
+```
+sidebar          stage                       detail
+────────┬───────────────────────────┬──────────────────────
+runs    │  the mesh, in 3D          │  the photo it came
+        │                           │  from, boxes drawn on
+        ├───────────────────────────┤  it
+        │  pipeline strip:          │
+        │  photo → crops → scene    │  the crop, the mesh
+        │                           │  stats, the placement
+```
+
+Click any object in the strip — or any box drawn on the photo — and the whole right-hand column becomes that one object's story: **which patch of the photograph** produced it, **the crop** that was fed to the reconstructor, **the mesh** that came back (triangles, materials, bounding box in metres), and **where it was placed** (position, target size, rotation). That is the end-to-end trace for a single result.
+
+Runs come in four shapes, and the viewer labels which one it is looking at:
+
+| kind | what it is |
+|---|---|
+| `room` | `dreamspace-room`: photo → crops → meshes → assembled scene |
+| `scene` | a `scene.json` beside its GLB — usually hand-written or re-assembled |
+| `object` | `dreamspace-generate`: one image → one mesh |
+| `images` | crops with no scene.json, from a run that did not finish |
+
+Things it deliberately surfaces rather than hides: objects that were **detected and reconstructed but never placed** (a mesh under 200 faces is dropped — see `is_usable`), and objects that **skipped reconstruction entirely** because they are flat and became textured panels.
+
+| key | |
+|---|---|
+| `F` | fit the camera to the model |
+| `W` | wireframe |
+| `G` | 1 m ground grid (0.25 m / 0.1 m for smaller objects) |
+| `B` | bounding box |
+| `E` | pale backdrop, for meshes too dark to read against black |
+| `R` | spin |
+| `↑` `↓` | previous / next object in the run |
+
+Drop a `.glb` from anywhere onto the viewport to inspect it without restarting. New runs appear on their own — no refresh needed.
+
+#### Generating from the viewer
+
+The page can start runs, not just look at them. **+ New** (or dropping an image onto the viewport) opens a small form: the image, **Single object** or **Whole room**, and the flags that matter for each — marching-cubes resolution and texture mode for objects; field of view, detection threshold, walls, decimation and a label list for rooms. A wide image preselects *Whole room*, since that is what wide usually means.
+
+The upload is saved into `inputs/` under a sanitised name and the viewer then runs the command you would have typed — `dreamspace-generate` or `dreamspace-room` — as a subprocess, streaming its output into a job card with the current stage (`2/4 reconstruct`) and a **Stop** button. When it finishes, the new run appears at the top of the list and opens itself.
+
+Jobs run **one at a time**. Two concurrent TripoSR runs do not fail politely on a 4 GB card, they OOM in the middle of whichever was further along, and queueing costs nothing when the bottleneck is one GPU either way.
+
+The server binds to `127.0.0.1` only, which matters more once a POST to it starts a subprocess. Uploads are capped at 40 MB, must carry an image extension, and are stripped to a bare filename so nothing can be written outside `inputs/`. Use `--no-generate` for a browse-only server.
+
+**Where the boxes on the photo come from.** Runs made from now on record each detection — its pixel box, its label and the detector's confidence — into `scene.json` under `source`. Runs made before that have none, so for those the viewer recovers the rectangle by matching each crop back into the photo: `segment.crop` writes an exact, unresampled sub-rectangle, which makes it a template match with one right answer rather than a similarity search. The result is cached in `outputs/<name>/.provenance.json`, and the caption says which of the two you are looking at.
+
+It runs a server rather than opening an HTML file because browsers block a `file://` page from fetching a local `.glb` cross-origin — double-clicking an HTML file gives you an empty viewport. The three.js modules come from a CDN, so the first load needs a network connection.
 
 Other options: drag a `.glb` onto [gltf-viewer.donmccurdy.com](https://gltf-viewer.donmccurdy.com), the **glTF Tools** VS Code extension, Windows **3D Viewer**, or Blender via `File → Import → glTF 2.0`.
 
@@ -121,7 +171,24 @@ Everything upstream of that JSON is testable without Blender; everything downstr
 
 `MODEL_BACKEND=hunyuan3d` is implemented in [backends/hunyuan3d.py](src/dreamspace/backends/hunyuan3d.py) and produces substantially better output, but **cannot run here**: ~6 GB for geometry, ~16 GB with texture, plus two CUDA extensions that need the Toolkit. The backend refuses to load below 6 GB.
 
-On a rented GPU (RunPod/Vast, ~$0.30–0.50/hr for a 4090):
+### Modal: rent the GPU per second, keep working here
+
+[modal_app/](modal_app/) is a ready-to-run [Modal](https://modal.com) app for **Hunyuan3D-2.1** — the newer model, with PBR texture output. It builds the CUDA image, compiles both extensions, and caches ~30 GB of weights in a Volume, all on Modal's side. This machine sends an image and receives a `.glb`:
+
+```powershell
+uv pip install -e ".[modal]"
+modal setup                                        # one-time browser login
+modal run modal_app/hunyuan3d.py::prefetch         # warm the weight cache (optional)
+modal run modal_app/hunyuan3d.py --image inputs\chair.png
+```
+
+Output lands in `outputs/` like any other run, so `dreamspace-view` picks it up unchanged. The first `modal run` builds the image (20–40 min, cached afterwards); a warm container turns an image into a textured mesh in 3–6 minutes for roughly 10–20 cents. A new Modal account gets $30 of free credit a month. Setup, flags, costs and troubleshooting: **[modal_app/README.md](modal_app/README.md)**.
+
+No HuggingFace account is needed: `tencent/Hunyuan3D-2.1` is public and the container downloads it anonymously. `HF_TOKEN` in `.env` is forwarded if present, but only raises the download rate limit.
+
+### Or a plain rented box
+
+On a rented GPU (RunPod/Vast, ~$0.30–0.50/hr for a 4090), with the 2.0 backend in `src/`:
 
 ```bash
 git clone <this project> && cd 3d
@@ -151,7 +218,10 @@ src/dreamspace/
     generate.py         dreamspace-generate  (one image -> one mesh)
     room.py             dreamspace-room      (one photo -> one scene)
     assemble.py         dreamspace-assemble  (scene.json -> one GLB)
-    view.py             dreamspace-view      (browser preview)
+    view.py             dreamspace-view      (browser inspector)
+    runs.py             walks outputs/ back into runs, recovers crop boxes
+    jobs.py             uploads -> inputs/, runs the CLIs, streams their output
+    viewer/index.html   the inspector page itself
   backends/
     base.py             Backend ABC + registry + vendor cloning
     triposr.py          runs on 4 GB
@@ -164,6 +234,9 @@ src/dreamspace/
     assemble.py         drives Blender as a subprocess
     blender/
       build_scene.py    runs INSIDE Blender: walls, import, fit, export
+modal_app/
+  hunyuan3d.py          Hunyuan3D-2.1 on a rented Modal GPU: image, weight volume, entrypoint
+  README.md             setup, flags, costs, troubleshooting
 vendor/                 upstream repos, cloned on first run (gitignored)
 ```
 

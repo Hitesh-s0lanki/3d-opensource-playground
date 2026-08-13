@@ -28,7 +28,7 @@ from ..config import Config
 from .assemble import assemble
 from .layout import Camera, estimate_layout
 from .segment import segment
-from .spec import SceneSpec
+from .spec import SceneSpec, SourceSpec
 
 
 MIN_FACES = 200
@@ -206,9 +206,14 @@ def build_room(
     # -- 3. where does each one go ------------------------------------------
     console.rule("[bold]3/4  layout")
     size = Image.open(image_path).size
+    # The fourth element is provenance: which photo, which crop, what the
+    # detector called it and how sure it was. Recorded here because this is the
+    # only point where all four are still in hand.
     items = [
-        (name, det.box, str(meshes[name]))
-        for det, name, _ in results
+        (name, det.box, str(meshes[name]),
+         SourceSpec(image=str(image_path), crop=str(crop_path),
+                    label=det.label, score=det.score, box=det.box))
+        for det, name, crop_path in results
         if name in meshes
     ]
     spec = estimate_layout(items, size, camera=camera, name=stem, walls=walls)

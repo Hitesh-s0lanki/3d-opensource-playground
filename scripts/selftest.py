@@ -147,6 +147,45 @@ check("flat items become panels", flat.objects[0].kind == "billboard")
 check("panels face into the room", flat.objects[0].rotation_z in (0.0, 90.0, -90.0, 180.0))
 
 # ---------------------------------------------------------------------------
+print("\nmarching cubes shim")
+
+# PyMCubes returns vertices in array-index order (i, j, k); torchmcubes returns
+# them reversed. TripoSR's isosurface.py unconditionally applies
+# v_pos[..., [2, 1, 0]] to undo the torchmcubes ordering, so a shim that hands
+# back index order makes that line reflect the mesh across x=z instead - which
+# mirrors the model and inverts every normal. That shipped for a while, hidden
+# behind FLIP_FACES=true, so it is worth a standing check.
+import numpy as np
+import torch
+import trimesh
+
+from dreamspace.compat import install_torchmcubes_shim
+
+install_torchmcubes_shim()
+import torchmcubes
+
+RES = 48
+# Distinct value per axis, kept clear of the grid edges so the blob stays closed.
+CENTRE = np.array([12.0, 24.0, 34.0])
+ii, jj, kk = np.meshgrid(*(np.arange(RES),) * 3, indexing="ij")
+sq = (ii - CENTRE[0]) ** 2 + (jj - CENTRE[1]) ** 2 + (kk - CENTRE[2]) ** 2
+density = 100.0 * np.exp(-sq / (2 * 5.0**2))
+
+# extract_mesh() passes -(density - threshold); MarchingCubeHelper.forward()
+# negates a second time, so the field reaching marching_cubes is the raw offset.
+verts, faces = torchmcubes.marching_cubes(torch.from_numpy(density - 25.0), 0.0)
+v_pos = verts.numpy()[:, [2, 1, 0]]                  # isosurface.py's swizzle
+mesh = trimesh.Trimesh(v_pos, faces.numpy(), process=False)
+
+offset = float(np.linalg.norm(v_pos.mean(axis=0) - CENTRE))
+check("shim survives TripoSR's [2,1,0] swizzle", offset < 0.5,
+      f"blob landed {offset:.2f} voxels from where it was queried")
+check("shim yields outward-facing normals", mesh.volume > 0,
+      f"signed volume {mesh.volume:+.1f}; FLIP_FACES should not be needed")
+check("shim mesh is closed", mesh.is_watertight)
+
+
+# ---------------------------------------------------------------------------
 print()
 if FAILED:
     print(f"{len(FAILED)} failed, {PASSED} passed")
