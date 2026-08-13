@@ -1,0 +1,157 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-cormorant);
+  --font-display: var(--font-cormorant);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* the app's own color vocabulary (bg ramp, ink ramp, brand + semantics) */
+  --color-paper: var(--paper);
+  --color-paper-deep: var(--paper-deep);
+  --color-cream: var(--cream);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-soft: var(--brand-soft);
+  --color-honey: var(--honey);
+  --color-moss: var(--moss);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-box: var(--box);
+  --color-danger: var(--danger);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* Cool indigo studio palette - soft blue-grey ground, slate ink, indigo brand. */
+  --paper: #f4f5fa;
+  --paper-deep: #e9ecf4;
+  --cream: #e1e6f2;
+  --surface: #ffffff;
+  --ink: #1f2430;
+  --ink-soft: #454e63;
+  --ink-muted: #7e879c;
+  --brand: #4f46e5;
+  --brand-deep: #4338ca;
+  --brand-soft: #818cf8;
+  --honey: #d97706;
+  --moss: #178a50;
+  --line: #e2e6f0;
+  --line-strong: #cbd2e1;
+  --box: #0891b2;
+  --danger: #dc2626;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--brand);
+  --primary-foreground: #f4f5ff;
+  --secondary: var(--cream);
+  --secondary-foreground: #333c52;
+  --muted: var(--paper-deep);
+  --muted-foreground: var(--ink-muted);
+  --accent: #e4e4fb;
+  --accent-foreground: #3730a3;
+  --destructive: var(--danger);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
+  --chart-2: var(--honey);
+  --chart-3: var(--box);
+  --chart-4: var(--moss);
+  --chart-5: var(--ink-muted);
+  --radius: 0.75rem;
+  --sidebar: #eef0f7;
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: #f4f5ff;
+  --sidebar-accent: var(--paper-deep);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--brand);
+}
+
+/* The viewer is deliberately light-only: no `.dark` palette is defined, so the
+   tokens above are the single source of truth in every color scheme. */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--brand) 16%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--paper-deep);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #c2c9dc;
+    border-radius: 8px;
+    border: 3px solid var(--paper-deep);
+  }
+}
+
+@layer components {
+  /* the tiny uppercase label above a section - Empire-Atlas style "kicker" */
+  .kicker {
+    @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted;
+  }
+}

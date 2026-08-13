@@ -45,6 +45,30 @@ def _vec3(value, label: str) -> Vec3:
 
 
 @dataclass
+class SourceSpec:
+    """Where an object came from in the photo it was found in.
+
+    Nothing downstream reads this - the assembler has no use for pixels. It is
+    recorded so a finished mesh can be traced back to the patch of the original
+    image that produced it, which is the first thing anyone asks when a result
+    looks wrong. Optional: a hand-written spec has no detector behind it.
+    """
+
+    image: str = ""               # the photo the object was detected in
+    crop: str = ""                # the patch fed to the reconstructor
+    label: str = ""               # what the detector called it, before uniquing
+    score: float = 0.0            # detector confidence, 0-1
+    box: tuple = (0.0, 0.0, 0.0, 0.0)   # x0, y0, x1, y1 in source pixels
+
+    def __post_init__(self) -> None:
+        items = tuple(float(v) for v in self.box)
+        if len(items) != 4:
+            raise ValueError(f"source.box needs 4 values, got {len(items)}")
+        self.box = items
+        self.score = float(self.score)
+
+
+@dataclass
 class ObjectSpec:
     """One piece of furniture: a mesh file plus where to put it."""
 
@@ -69,10 +93,17 @@ class ObjectSpec:
     #   looks better, weighs ~2 KB, and needs no reconstruction at all.
     kind: str = "mesh"
 
+    # Provenance, not instruction. See SourceSpec.
+    source: "SourceSpec | None" = None
+
     def __post_init__(self) -> None:
         self.position = _vec3(self.position, f"{self.name}.position")
         self.size = _vec3(self.size, f"{self.name}.size")
         self.rotation_z = float(self.rotation_z)
+        # Reloading a saved spec hands this back as a plain dict, since JSON has
+        # no way to say which dataclass a mapping came from.
+        if isinstance(self.source, dict):
+            self.source = SourceSpec(**self.source)
 
     def validate(self) -> None:
         if not self.name:
