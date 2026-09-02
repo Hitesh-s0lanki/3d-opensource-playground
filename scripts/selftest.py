@@ -15,12 +15,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-from dreamspace.scene.layout import (
+# The backend is imported as `src.…`, which means the repo root has to be on
+# sys.path. Running a file inside scripts/ puts scripts/ there instead, so this
+# has to be fixed up before the imports below - and doing it here means the
+# checks run against a plain checkout, with no editable install needed.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.services.layout_service import (  # noqa: E402
     Camera, Prior, _auto_walls, _choose_wall, depth_from_height,
     estimate_layout, lookup_prior,
 )
-from dreamspace.scene.segment import Detection, deduplicate
-from dreamspace.scene.spec import ObjectSpec, RoomSpec, SceneSpec
+from src.schemas.scene import ObjectSpec, RoomSpec, SceneSpec  # noqa: E402
+from src.services.segmentation_service import Detection, deduplicate  # noqa: E402
 
 PASSED = 0
 FAILED: list[str] = []
@@ -159,7 +165,7 @@ import numpy as np
 import torch
 import trimesh
 
-from dreamspace.compat import install_torchmcubes_shim
+from src.services.backends.compat import install_torchmcubes_shim
 
 install_torchmcubes_shim()
 import torchmcubes
@@ -183,6 +189,57 @@ check("shim survives TripoSR's [2,1,0] swizzle", offset < 0.5,
 check("shim yields outward-facing normals", mesh.volume > 0,
       f"signed volume {mesh.volume:+.1f}; FLIP_FACES should not be needed")
 check("shim mesh is closed", mesh.is_watertight)
+
+
+# ---------------------------------------------------------------------------
+# The API's own wiring: auth, validation and status codes. No GPU is involved -
+# nothing here reaches modal_service, which is the point. What is being checked
+# is that a bad request is refused at the edge rather than after Modal has been
+# billed for it.
+print()
+print("api")
+
+try:
+    from fastapi.testclient import TestClient
+except ImportError as exc:
+    print(f"  skip  fastapi not installed ({exc})")
+else:
+    from src.config import Config  # noqa: E402
+    from src.main import app  # noqa: E402
+    from src.routes.dependencies import get_config  # noqa: E402
+
+    app.dependency_overrides[get_config] = lambda: Config(api_token="s3cret")
+    client = TestClient(app)
+    auth = {"X-Dioramic-Token": "s3cret"}
+
+    body = client.get("/health").json()
+    check("health needs no token", body["status"] == "ok")
+    check("health reports the auth requirement", body["auth_required"] is True)
+
+    check("generate rejects a missing token",
+          client.post("/generate", json={"image_b64": "aGk="}).status_code == 401)
+    check("generate rejects a wrong token",
+          client.post("/generate", json={"image_b64": "aGk="},
+                      headers={"X-Dioramic-Token": "nope"}).status_code == 401)
+
+    # Caught by GenerateRequest.image_bytes() before anything is queued.
+    check("generate rejects unparseable base64",
+          client.post("/generate", json={"image_b64": "not base64!"},
+                      headers=auth).status_code == 400)
+    check("generate rejects an out-of-range knob",
+          client.post("/generate", json={"image_b64": "aGk=", "steps": 9999},
+                      headers=auth).status_code == 422)
+    check("result requires a call id",
+          client.get("/result", headers=auth).status_code == 422)
+
+    # SceneSpec.from_dict does this validation, and the controller turns its
+    # ValueError into a 422 rather than letting it become a 500.
+    check("assemble rejects a spec with a zero-sized room",
+          client.post("/scenes/assemble",
+                      json={"spec": {"room": {"width": 0}, "objects": []}},
+                      headers=auth).status_code == 422)
+
+    app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
