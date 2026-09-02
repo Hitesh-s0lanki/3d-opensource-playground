@@ -1,5 +1,5 @@
 {
-  "name": "web",
+  "name": "dioramic",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -14,7 +14,10 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@clerk/nextjs": "^7.8.3",
+    "@clerk/ui": "^1.31.0",
     "@neondatabase/serverless": "^1.1.0",
+    "@vercel/blob": "^2.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
