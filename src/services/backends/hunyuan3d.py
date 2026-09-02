@@ -16,7 +16,7 @@ from pathlib import Path
 
 import torch
 
-from ..preprocess import prepare
+from src.services.preprocess_service import prepare
 from .base import Backend, register
 
 

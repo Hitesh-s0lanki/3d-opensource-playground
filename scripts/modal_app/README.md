@@ -8,9 +8,9 @@ a Volume, and exposes one method that takes image bytes and returns a `.glb`. Yo
 only ever holds the input and the output.
 
 ```
-inputs/chair.png                     modal_app/hunyuan3d.py
+photos/chair.png                     scripts/modal_app/hunyuan3d.py
        |                                     |
-       |  modal run --image inputs/chair.png |
+       |  modal run --image photos/chair.png |
        +-------------------------------------+
                                              v
                             +--------------------------------+
@@ -28,8 +28,9 @@ inputs/chair.png                     modal_app/hunyuan3d.py
                                     outputs/chair.glb
 ```
 
-Why the directory is `modal_app/` and not `modal/`: a top-level folder named `modal` shadows
-the `modal` package on `sys.path` and every `import modal` in the repo would break.
+Why the directory is `modal_app` and not `modal`: a folder named `modal` shadows the `modal`
+package on `sys.path` — `modal run` puts the script's own directory first, so every
+`import modal` inside these files would resolve to the folder instead of the package.
 
 ## Setup
 
@@ -57,23 +58,23 @@ weight cache repeatedly.
 
 ```powershell
 # Warm the weight cache on a cheap CPU container first (optional, recommended)
-modal run modal_app/hunyuan3d.py::prefetch
+modal run scripts/modal_app/hunyuan3d.py::prefetch
 
 # One image -> outputs/chair.glb
-modal run modal_app/hunyuan3d.py --image inputs/chair.png
+modal run scripts/modal_app/hunyuan3d.py --image photos/chair.png
 
 # A whole folder, sequentially, on one warm container
-modal run modal_app/hunyuan3d.py --image inputs/
+modal run scripts/modal_app/hunyuan3d.py --image photos/
 
 # Geometry only: skips the 21 GB paint pipeline, ~4x faster
-modal run modal_app/hunyuan3d.py --image inputs/chair.png --no-texture
+modal run scripts/modal_app/hunyuan3d.py --image photos/chair.png --no-texture
 
 # Coarser, cheaper geometry
-modal run modal_app/hunyuan3d.py --image inputs/bedroom.jpg --octree-resolution 256 --steps 30
+modal run scripts/modal_app/hunyuan3d.py --image photos/bedroom.jpg --octree-resolution 256 --steps 30
 ```
 
-Output lands in `outputs/<name>.glb`, the same place `dreamspace-generate` writes, so
-`dreamspace-view` picks it up with no extra step.
+Output lands in `outputs/<name>.glb`, the same place `dioramic-generate` writes, so
+the viewer in `frontend/` picks it up with no extra step.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
@@ -88,22 +89,29 @@ Output lands in `outputs/<name>.glb`, the same place `dreamspace-generate` write
 | `--view-resolution` | 512 | Multiview render size, 512 or 768 |
 | `--no-remove-background` | off | Skip rembg. Only for images that are already cut out |
 
-## From the viewer
+## Calling the deployed app
 
-`dreamspace-view` has a third job kind next to *Single object* and *Whole room*: **Cloud
-GPU**. It calls the deployed app through [call.py](call.py), so deploy once first:
+[call.py](call.py) looks the deployed class up by name and calls it, instead of the
+throwaway app `modal run` creates per invocation. Deploy once, then call it as often as
+you like:
 
 ```powershell
-modal deploy modal_app/hunyuan3d.py
-python modal_app/call.py --image inputs/chair.png     # what the button runs
+modal deploy scripts/modal_app/hunyuan3d.py
+python scripts/modal_app/call.py --image photos/chair.png
 ```
+
+It writes to `outputs/<stem>.glb` like every other generator, so the viewer treats what
+comes back as an ordinary run. The removed Python viewer had a **Cloud GPU** button that
+ran exactly this command; `frontend/` has no equivalent yet, so cloud runs are a
+command-line step for now.
 
 `modal run` builds a throwaway app per invocation; a deployed app is looked up by name and
 already exists. It saves seconds, not money — the GPU time is identical.
 
-**The viewer holds Python in memory.** Editing `jobs.py` or `call.py` while it is running
-changes nothing until you restart it, and it gives no sign: it will happily keep running the
-previous version of the pipeline for a full job. Restart after any change under `src/`.
+**Each job is a fresh interpreter.** The viewer spawns the venv's Python per job rather
+than importing the pipeline, so an edit under `src/` or to `call.py` takes effect on the
+next run you start — but never mid-job: a job already running keeps the code it started
+with for its full duration.
 
 ## What it actually costs
 
@@ -134,7 +142,7 @@ it is set at roughly the break-even point for click-wait-look use. Raise it if y
 
 ```powershell
 modal app list                              # what is running
-modal app logs dreamspace-hunyuan3d         # live logs
+modal app logs dioramic-hunyuan3d         # live logs
 modal volume ls hunyuan3d-cache             # what is cached
 modal volume rm -r hunyuan3d-cache /huggingface   # force a re-download
 ```
@@ -186,15 +194,15 @@ that is why `custom_rasterizer` has a layer to itself.
 addressable:
 
 ```powershell
-modal deploy modal_app/hunyuan3d.py
+modal deploy scripts/modal_app/hunyuan3d.py
 ```
 
-Then call it from any Python process, including the `dreamspace` CLI:
+Then call it from any Python process, including the `dioramic` CLI:
 
 ```python
 import modal
 
-Hunyuan3D = modal.Cls.from_name("dreamspace-hunyuan3d", "Hunyuan3D")
+Hunyuan3D = modal.Cls.from_name("dioramic-hunyuan3d", "Hunyuan3D")
 glb = Hunyuan3D().generate.remote(image_bytes, texture=True)
 ```
 

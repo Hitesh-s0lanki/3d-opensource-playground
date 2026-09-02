@@ -8,8 +8,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from ..compat import install_torchmcubes_shim, patch_bake_texture_device
-from ..preprocess import prepare
+from src.services.backends.compat import install_torchmcubes_shim, patch_bake_texture_device
+from src.services.preprocess_service import prepare
 from .base import Backend, register
 
 

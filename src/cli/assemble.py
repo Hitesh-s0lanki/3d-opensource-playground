@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 """Assemble a room description into a single GLB.
 
-    dreamspace-assemble --spec examples/room-demo.json
-    dreamspace-assemble --spec scene.json --out outputs/bedroom.glb
+    dioramic-assemble --spec scene.json --out outputs/bedroom.glb
 
-The spec format is documented in dreamspace/scene/spec.py. Needs Blender:
+The spec format is documented in src/schemas/scene.py. Needs Blender:
 set BLENDER_EXE in .env, or put blender on PATH.
 """
 
@@ -16,16 +15,16 @@ from pathlib import Path
 
 from rich.console import Console
 
-from ..config import Config
-from ..scene.assemble import assemble
-from ..scene.spec import SceneSpec
+from src.config import Config
+from src.services.assembly_service import assemble
+from src.schemas.scene import SceneSpec
 
 console = Console()
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dreamspace-assemble",
+        prog="dioramic-assemble",
         description="Build a room shell, place meshes inside it, export one GLB.",
     )
     p.add_argument("--spec", "-s", type=Path, required=True,
@@ -83,7 +82,7 @@ def main() -> int:
     elapsed = time.perf_counter() - started
     size_mb = written.stat().st_size / 1e6
     console.print(f"[green]->[/] {written}  [dim]{size_mb:.2f} MB in {elapsed:.1f}s[/]")
-    console.print("[dim]View it with:[/] [bold]dreamspace-view[/]")
+    console.print("[dim]View it with:[/] [bold]npm run dev[/] [dim]in frontend/[/]")
     return 0
 
 

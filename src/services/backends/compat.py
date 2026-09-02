@@ -73,7 +73,7 @@ def install_torchmcubes_shim() -> str:
 
     module = types.ModuleType("torchmcubes")
     module.marching_cubes = marching_cubes
-    module.__doc__ = "PyMCubes-backed stand-in installed by dreamspace.compat"
+    module.__doc__ = "PyMCubes-backed stand-in installed by src.services.backends.compat"
     sys.modules["torchmcubes"] = module
 
     return "PyMCubes (CPU shim - no CUDA Toolkit required)"
@@ -101,7 +101,7 @@ def patch_bake_texture_device() -> None:
     import torch
     from tsr import bake_texture as _bt
 
-    if getattr(_bt, "_dreamspace_device_patched", False):
+    if getattr(_bt, "_dioramic_device_patched", False):
         return
 
     def positions_to_colors(model, scene_code, positions_texture, texture_resolution):
@@ -117,4 +117,4 @@ def patch_bake_texture_device() -> None:
         return rgba_f.reshape(texture_resolution, texture_resolution, 4)
 
     _bt.positions_to_colors = positions_to_colors
-    _bt._dreamspace_device_patched = True
+    _bt._dioramic_device_patched = True

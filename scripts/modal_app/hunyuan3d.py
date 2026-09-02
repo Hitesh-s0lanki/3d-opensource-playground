@@ -8,7 +8,7 @@ so nothing here has to exist on Windows.
 
     pip install modal
     modal setup
-    modal run modal_app/hunyuan3d.py --image inputs/chair.png
+    modal run scripts/modal_app/hunyuan3d.py --image photos/chair.png
 
 The first run builds the image (20-40 min, once) and pulls ~30 GB of weights
 into a Volume (once, or ahead of time via `::prefetch`). After that a call is a
@@ -29,7 +29,7 @@ import modal
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-APP_NAME = "dreamspace-hunyuan3d"
+APP_NAME = "dioramic-hunyuan3d"
 
 REPO_URL = "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git"
 REPO_DIR = "/opt/Hunyuan3D-2.1"
@@ -327,7 +327,8 @@ def _hf_secret() -> list[modal.Secret]:
     token = os.environ.get("HF_TOKEN", "").strip()
 
     if not token:
-        env_file = Path(__file__).resolve().parent.parent / ".env"
+        # hunyuan3d.py -> scripts/modal_app -> scripts -> repo root.
+        env_file = Path(__file__).resolve().parents[2] / ".env"
         if env_file.is_file():
             for line in env_file.read_text(encoding="utf-8").splitlines():
                 key, sep, value = line.partition("=")
@@ -372,7 +373,7 @@ prefetch_image = modal.Image.debian_slim(python_version=PYTHON_VERSION).pip_inst
 def prefetch() -> None:
     """Populate the weight cache without paying for a GPU.
 
-        modal run modal_app/hunyuan3d.py::prefetch
+        modal run scripts/modal_app/hunyuan3d.py::prefetch
 
     Optional - the first generate() would download the same files - but doing it
     here means the download happens on a CPU container at a fraction of the
@@ -536,6 +537,112 @@ class Hunyuan3D:
 
 
 # ---------------------------------------------------------------------------
+# HTTP surface
+# ---------------------------------------------------------------------------
+# Superseded, and kept working. src/ is now a FastAPI backend serving these same
+# three paths with the same token header, calling the class above through the
+# Modal client instead of from inside the container - which is where new work
+# belongs, since it can also reach the room pipeline and Blender.
+#
+# This endpoint stays because a deployment whose MODAL_ENDPOINT points straight
+# at Modal is still a valid one, and removing it would break it on deploy. Point
+# MODAL_ENDPOINT at the backend instead and nothing here is used.
+#
+# The web app drives generation from Node, which has no Modal client, so the
+# class is fronted by three endpoints. One ASGI app rather than three separate
+# `fastapi_endpoint` functions, because those each get their own hostname and
+# the caller wants one base URL with paths under it.
+#
+# The split into submit-then-poll is deliberate. A textured generation runs
+# 60-105 seconds; holding an HTTP request open that long is exactly what
+# serverless request timeouts kill. `spawn` queues the call and returns its id
+# immediately, and /result is polled until the bytes exist.
+api_image = modal.Image.debian_slim(python_version=PYTHON_VERSION).pip_install(
+    "fastapi[standard]==0.115.12"
+)
+
+# The endpoint spends GPU money, so it is not open to the internet. Create the
+# secret once, and give the same value to the web app as MODAL_TOKEN:
+#     modal secret create dioramic-api-token DIORAMIC_TOKEN=$(openssl rand -hex 32)
+TOKEN_SECRET = "dioramic-api-token"
+
+
+@app.function(
+    image=api_image,
+    secrets=[modal.Secret.from_name(TOKEN_SECRET)],
+    # Only queueing and polling happens here; the GPU work is in the class.
+    timeout=5 * MINUTES,
+    min_containers=0,
+)
+@modal.asgi_app()
+def api():
+    import base64
+
+    from fastapi import FastAPI, Header, HTTPException, Response
+    from fastapi.responses import JSONResponse
+
+    web = FastAPI(title="dioramic")
+
+    def check(token: str | None) -> None:
+        expected = os.environ.get("DIORAMIC_TOKEN", "")
+        if not expected:
+            raise HTTPException(500, "DIORAMIC_TOKEN is not set on the container")
+        # Constant-time: a token check that returns early leaks its prefix.
+        import hmac
+
+        if not token or not hmac.compare_digest(token, expected):
+            raise HTTPException(401, "bad or missing X-Dioramic-Token")
+
+    @web.post("/generate")
+    async def generate(body: dict, x_dioramic_token: str | None = Header(default=None)):
+        check(x_dioramic_token)
+        try:
+            image_bytes = base64.b64decode(body["image_b64"])
+        except Exception as exc:
+            raise HTTPException(400, f"image_b64 is not valid base64: {exc}") from exc
+        if not image_bytes:
+            raise HTTPException(400, "empty image")
+
+        # Only the knobs the web app exposes; anything else keeps its default.
+        allowed = (
+            "texture",
+            "steps",
+            "guidance_scale",
+            "octree_resolution",
+            "seed",
+            "max_num_view",
+            "view_resolution",
+            "remove_background",
+        )
+        options = {key: body[key] for key in allowed if body.get(key) is not None}
+
+        call = Hunyuan3D().generate.spawn(image_bytes, **options)
+        return {"call_id": call.object_id}
+
+    @web.get("/result")
+    async def result(call_id: str, x_dioramic_token: str | None = Header(default=None)):
+        check(x_dioramic_token)
+        handle = modal.FunctionCall.from_id(call_id)
+        try:
+            # timeout=0 asks "is it done?" without blocking the request.
+            glb = handle.get(timeout=0)
+        except TimeoutError:
+            return JSONResponse({"state": "pending"}, status_code=202)
+        except Exception as exc:
+            # The generation itself raised; the reason is worth returning.
+            raise HTTPException(500, f"{type(exc).__name__}: {exc}") from exc
+        return Response(content=glb, media_type="model/gltf-binary")
+
+    @web.post("/cancel")
+    async def cancel(call_id: str, x_dioramic_token: str | None = Header(default=None)):
+        check(x_dioramic_token)
+        modal.FunctionCall.from_id(call_id).cancel()
+        return {"cancelled": True}
+
+    return web
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoint
 # ---------------------------------------------------------------------------
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -567,9 +674,9 @@ def main(
 ) -> None:
     """Send one image, or a folder of them, to the GPU and write the GLBs here.
 
-        modal run modal_app/hunyuan3d.py --image inputs/chair.png
-        modal run modal_app/hunyuan3d.py --image inputs/ --no-texture
-        modal run modal_app/hunyuan3d.py --image inputs/bedroom.jpg --octree-resolution 256
+        modal run scripts/modal_app/hunyuan3d.py --image photos/chair.png
+        modal run scripts/modal_app/hunyuan3d.py --image photos/ --no-texture
+        modal run scripts/modal_app/hunyuan3d.py --image photos/bedroom.jpg --octree-resolution 256
     """
     images = _collect(Path(image))
     out_dir = Path(out)

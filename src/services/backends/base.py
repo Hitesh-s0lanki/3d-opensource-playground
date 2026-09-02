@@ -7,7 +7,7 @@ import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from ..config import VENDOR_DIR, Config
+from src.config import VENDOR_DIR, Config
 
 
 class Backend(ABC):

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Turn one room photo into one assembled 3D scene.
 
-    dreamspace-room --image inputs/bedroom.jpg
-    dreamspace-room --image inputs/bedroom.jpg --labels "bed,wardrobe,lamp"
-    dreamspace-room --image inputs/bedroom.jpg --fov 95 --decimate 0.2
+    dioramic-room --image photos/bedroom.jpg
+    dioramic-room --image photos/bedroom.jpg --labels "bed,wardrobe,lamp"
+    dioramic-room --image photos/bedroom.jpg --fov 95 --decimate 0.2
 
 Runs detect -> reconstruct -> layout -> assemble. Intermediate crops, meshes
 and the scene JSON are kept under outputs/<name>/ so a re-run reuses them.
@@ -17,16 +17,16 @@ from pathlib import Path
 
 from rich.console import Console
 
-from ..config import Config
-from ..scene.layout import Camera
-from ..scene.room import build_room
+from src.config import Config
+from src.services.layout_service import Camera
+from src.services.room_service import build_room, parse_walls
 
 console = Console()
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dreamspace-room",
+        prog="dioramic-room",
         description="Reconstruct a whole room from a single photo.",
     )
     p.add_argument("--image", "-i", type=Path, required=True,
@@ -86,16 +86,6 @@ def main() -> int:
             f"Expect CUDA OOM below ~10 GB of VRAM.[/]"
         )
 
-    choice = args.walls.strip().lower()
-    if choice == "auto":
-        walls = "auto"
-    elif choice == "all":
-        walls = ("-x", "+x", "-y", "+y")
-    elif choice == "none":
-        walls = ()
-    else:
-        walls = tuple(w.strip() for w in args.walls.split(",") if w.strip())
-
     camera = Camera(fov_x_deg=args.fov, height=args.camera_height,
                     pitch_deg=args.pitch)
 
@@ -112,7 +102,7 @@ def main() -> int:
             threshold=args.threshold,
             skip_existing=not args.regenerate,
             blender=args.blender,
-            walls=walls,
+            walls=parse_walls(args.walls),
         )
     except FileNotFoundError as exc:
         console.print(f"[red]{exc}[/]")
@@ -129,7 +119,7 @@ def main() -> int:
     if result.failed:
         console.print(f"[yellow]skipped:[/] {', '.join(result.failed)}")
     console.print(f"[dim]edit {result.spec_path} and re-run "
-                  f"dreamspace-assemble to adjust placement[/]")
+                  f"dioramic-assemble to adjust placement[/]")
     return 0
 
 

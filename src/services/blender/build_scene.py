@@ -3,9 +3,9 @@
     blender --background --factory-startup --python build_scene.py -- \
         --spec scene.json --out scene.glb
 
-Blender bundles its own interpreter, so this file may not import `dreamspace`
-or anything from the project venv: standard library and `bpy` only. The scene
-JSON is the entire interface - see dreamspace/scene/spec.py for the format.
+Blender bundles its own interpreter, so this file may not import anything from
+`src/` or the project venv: standard library and `bpy` only. The scene JSON is
+the entire interface - see src/schemas/scene.py for the format.
 
 Two conventions worth restating because everything here depends on them:
 Z is up, and units are metres with the floor surface at z=0.
@@ -23,7 +23,7 @@ from mathutils import Matrix, Vector
 # Printed on the last line of a successful run. Blender does not reliably
 # return a non-zero exit code when an embedded Python script raises, so the
 # driver looks for this sentinel rather than trusting the exit status alone.
-SENTINEL = "DREAMSPACE_ASSEMBLE_OK"
+SENTINEL = "DIORAMIC_ASSEMBLE_OK"
 
 
 # --------------------------------------------------------------------------
@@ -267,7 +267,7 @@ def decimate(objects, ratio):
     for obj in objects:
         if obj.type != "MESH":
             continue
-        modifier = obj.modifiers.new(name="dreamspace_decimate", type="DECIMATE")
+        modifier = obj.modifiers.new(name="dioramic_decimate", type="DECIMATE")
         modifier.decimate_type = "COLLAPSE"
         modifier.ratio = ratio
 
