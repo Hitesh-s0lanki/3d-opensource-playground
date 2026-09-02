@@ -1,11 +1,12 @@
 "use client";
 
-/** The left column: every run under outputs/, newest first, plus the queue of
+/** The left column: every run in the catalog, newest first, plus the queue of
  * jobs currently producing new ones. Each card carries the run's story in one
  * glance - what it is, what came out of it, and when.
  */
 
 import { useMemo, useState } from "react";
+import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { Box, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,8 @@ interface RunSidebarProps {
   jobs: JobSnapshot[];
   onCancelJob: (id: string) => void;
   onNew: () => void;
-  canGenerate: boolean;
+  /** Why a new run cannot be started, or null when it can. */
+  generateBlocked: string | null;
   db: { enabled: boolean; synced: boolean };
 }
 
@@ -75,7 +77,7 @@ export function RunSidebar({
   jobs,
   onCancelJob,
   onNew,
-  canGenerate,
+  generateBlocked,
   db,
 }: RunSidebarProps) {
   const [query, setQuery] = useState("");
@@ -108,18 +110,42 @@ export function RunSidebar({
       {/* masthead */}
       <header className="border-b px-4 pb-3.5 pt-4">
         <div className="flex items-center gap-3">
-          <Logo className="size-10 shrink-0 drop-shadow-sm" />
-          <div className="min-w-0">
+          <Logo className="size-11 shrink-0" />
+          <div className="min-w-0 flex-1">
             <h1 className="font-display text-[23px] font-bold leading-none tracking-[0.01em] text-ink">
-              diorama
+              dioramic
             </h1>
             <p className="mt-1 text-[11px] font-medium tracking-wide text-ink-muted">
               turn photos into 3D scenes
             </p>
           </div>
+          {/* account: sign in / sign up while signed out, avatar menu once in */}
+          <Show when="signed-in">
+            <UserButton />
+          </Show>
         </div>
 
-        <Button size="sm" className="mt-3.5 w-full shadow-xs" onClick={onNew} disabled={!canGenerate}>
+        <Show when="signed-out">
+          <div className="mt-3.5 flex gap-2">
+            <SignInButton mode="modal">
+              <Button size="sm" variant="outline" className="flex-1 shadow-xs">
+                Sign in
+              </Button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <Button size="sm" className="flex-1 shadow-xs">
+                Sign up
+              </Button>
+            </SignUpButton>
+          </div>
+        </Show>
+
+        <Button
+          size="sm"
+          className="mt-3.5 w-full shadow-xs"
+          onClick={onNew}
+          disabled={Boolean(generateBlocked)}
+        >
           <Plus data-icon="inline-start" /> New run
         </Button>
 
@@ -155,7 +181,7 @@ export function RunSidebar({
           {filtered.length === 0 && (
             <p className="px-2 py-6 text-center text-xs text-ink-muted">
               {runs.length === 0
-                ? `Nothing under outputs/ yet.${canGenerate ? " Click New run, or drop an image onto the viewport." : ""}`
+                ? `No runs yet.${generateBlocked ? "" : " Click New run, or drop an image onto the viewport."}`
                 : "No run matches that filter."}
             </p>
           )}
@@ -235,14 +261,12 @@ export function RunSidebar({
               neon
             </span>
           )}
-          <span className="font-mono">outputs/</span>
+          <span className="font-mono">blob</span>
         </span>
       </footer>
 
-      {!canGenerate && (
-        <p className="border-t p-3 text-[11px] text-ink-muted">
-          Browse-only: no Python venv found. Run setup.ps1 in the repo root to enable generation.
-        </p>
+      {generateBlocked && (
+        <p className="border-t p-3 text-[11px] text-ink-muted">Browse-only: {generateBlocked}</p>
       )}
     </aside>
   );

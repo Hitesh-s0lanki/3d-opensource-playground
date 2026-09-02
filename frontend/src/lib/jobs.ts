@@ -1,316 +1,339 @@
-/** Run the pipeline from the viewer, one job at a time.
+/** Generation jobs, owned by a user and held in Neon.
  *
- * A TypeScript port of the Python viewer's `jobs.py`. The generators are
- * already console scripts, so nothing is reimplemented here - the uploaded
- * image is saved into inputs/ and the same command you would have typed runs
- * as a subprocess, its output captured as it goes.
+ * The old runner spawned the venv's Python and scraped its stdout. Nothing
+ * runs locally now, so a job is a row plus a Modal call id, and the shape of
+ * the thing changed accordingly:
  *
- * Serially, and deliberately. A 4 GB card fits one TripoSR at a time; two
- * concurrent generations do not fail politely, they OOM in the middle of
- * whichever was further along. Queueing costs nothing here because the
- * bottleneck is a single GPU either way.
+ *   POST /api/jobs   upload the photo -> blob, insert the row, hand the bytes
+ *                    to Modal, store the call id
+ *   GET  /api/jobs   for every still-running row, ask Modal whether it is
+ *                    done; if it is, store the mesh and write the run
+ *
+ * Nothing is held in process memory between those two, which is what makes it
+ * survive a serverless cold start, a redeploy, or the user closing the tab
+ * mid-generation. There is also no queue any more: the 4 GB card that forced
+ * one-at-a-time is not in the picture, and Modal scales containers itself.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { recordJob } from "@/db/sync";
-import { INPUTS_DIR, OUTPUTS_DIR, ROOT, pythonExe } from "./paths";
+import { createHash } from "node:crypto";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import imageSize from "image-size";
+import { getDb } from "@/db";
+import { jobs } from "@/db/schema";
+import * as modal from "./modal";
+import { uniqueSlug, upsertRun } from "./runs";
+import { MAX_UPLOAD, blobConfigured, blobUrl, safeSegment, userKey, writeBlob } from "./storage";
 import type { JobKind, JobSnapshot, JobState } from "./types";
 
-// Uploads land in inputs/, so both the name and the extension have to be tame.
-const SAFE_CHARS = /[^A-Za-z0-9._-]+/g;
+type JobRow = typeof jobs.$inferSelect;
+
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
-export const MAX_UPLOAD = 40 * 1024 * 1024;
 
-// `console.rule("2/4  reconstruct")` and friends - the only progress signal
-// the CLIs emit in a machine-readable shape.
-const STAGE = /\b(\d+)\s*\/\s*(\d+)\b\s+([A-Za-z][\w .-]*)/;
-
-const KINDS: Record<JobKind, { module: string; label: string }> = {
-  object: { module: "dreamspace.cli.generate", label: "image → mesh" },
-  room: { module: "dreamspace.cli.room", label: "photo → scene" },
+const KINDS: Record<JobKind, { label: string }> = {
+  object: { label: "image → mesh" },
+  room: { label: "photo → scene" },
 };
+
+/** The room pipeline is four stages - detect, reconstruct, layout, assemble -
+ * and the last of them is Blender. None of that exists on Modal yet, so the
+ * kind is still modelled everywhere but cannot be submitted. */
+export const ROOM_AVAILABLE = false;
 
 export function isJobKind(kind: string): kind is JobKind {
   return kind in KINDS;
 }
 
-/** A file name that cannot escape the directory it is written into. */
-export function safeFilename(raw: string): string {
-  const name = path.basename(raw.replaceAll("\\", "/"));
-  const suffix = path.extname(name).toLowerCase();
-  if (!IMAGE_EXT.has(suffix)) throw new Error(`not an image: ${raw}`);
-  const stem = name
-    .slice(0, -suffix.length)
-    .replace(SAFE_CHARS, "-")
-    .replace(/^[-._]+|[-._]+$/g, "");
-  return (stem || "upload") + suffix;
+export function jobUnavailableReason(kind: JobKind): string | null {
+  if (kind === "room" && !ROOM_AVAILABLE) {
+    return "the room pipeline needs Blender and has not been ported to the cloud yet - single objects only for now";
+  }
+  if (!modal.modalConfigured()) {
+    return "generation is not configured - set MODAL_ENDPOINT and MODAL_TOKEN";
+  }
+  if (!blobConfigured()) {
+    return "storage is not configured - set BLOB_READ_WRITE_TOKEN";
+  }
+  return null;
 }
 
-/** Write an uploaded image into inputs/, without overwriting anything. */
-export async function storeUpload(filename: string, data: Buffer): Promise<string> {
+/** An image name that is safe as a blob key segment. */
+export function safeImageName(raw: string): string {
+  const name = safeSegment(raw, "upload");
+  const dot = name.lastIndexOf(".");
+  const suffix = dot > 0 ? name.slice(dot).toLowerCase() : "";
+  if (!IMAGE_EXT.has(suffix)) throw new Error(`not an image: ${raw}`);
+  return name;
+}
+
+function stem(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+function snapshot(row: JobRow): JobSnapshot {
+  const end = row.finishedAt ?? new Date();
+  const started = row.startedAt ?? row.queuedAt;
+  return {
+    id: row.id,
+    kind: row.kind as JobKind,
+    label: KINDS[row.kind as JobKind]?.label ?? row.kind,
+    image: row.imageName,
+    image_url: blobUrl(row.imageKey),
+    state: row.state as JobState,
+    stage: row.stage ?? "",
+    options: row.options,
+    run_id: row.runSlug ?? "",
+    elapsed: row.startedAt
+      ? Math.round((end.getTime() - row.startedAt.getTime()) / 100) / 10
+      : 0,
+    waited: Math.round((started.getTime() - row.queuedAt.getTime()) / 100) / 10,
+    returncode: null,
+    error: row.error ?? "",
+    log: row.log ?? [],
+  };
+}
+
+function modalOptions(options: Record<string, string>): modal.ModalOptions {
+  const number = (key: string, fallback?: number) => {
+    const raw = options[key];
+    if (!raw) return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  return {
+    texture: !(options.no_texture === "true" || options.no_texture === "1"),
+    steps: number("steps"),
+    guidance_scale: number("guidance_scale"),
+    octree_resolution: number("octree_resolution") ?? number("mc_resolution"),
+    seed: number("seed"),
+    max_num_view: number("max_num_view"),
+    view_resolution: number("view_resolution"),
+  };
+}
+
+/** Upload the photo, insert the row, hand it to Modal. */
+export async function submitJob(
+  userId: string,
+  kind: JobKind,
+  filename: string,
+  data: Buffer,
+  options: Record<string, string>,
+): Promise<JobSnapshot> {
+  if (!data.length) throw new Error("empty upload");
   if (data.length > MAX_UPLOAD) {
     throw new Error(
       `image is ${Math.round(data.length / 1e6)} MB; the limit is ${MAX_UPLOAD / 1e6} MB`,
     );
   }
-  if (!data.length) throw new Error("empty upload");
+  const blocked = jobUnavailableReason(kind);
+  if (blocked) throw new Error(blocked);
 
-  await fsp.mkdir(INPUTS_DIR, { recursive: true });
-  const name = safeFilename(filename);
-  let target = path.join(INPUTS_DIR, name);
-  const exists = async (p: string) =>
-    fsp.stat(p).then((st) => st.isFile(), () => false);
-  if (await exists(target)) {
-    const current = await fsp.readFile(target);
-    if (current.equals(data)) return target; // same picture, same name
-    const suffix = path.extname(name);
-    const stem = name.slice(0, -suffix.length);
-    for (let n = 2; await exists(target); n++) {
-      target = path.join(INPUTS_DIR, `${stem}-${n}${suffix}`);
-    }
+  const db = getDb();
+  const imageName = safeImageName(filename);
+  const slug = await uniqueSlug(userId, stem(imageName));
+
+  const stored = await writeBlob(
+    userKey(userId, slug, imageName),
+    data,
+    contentTypeFor(imageName),
+  );
+
+  // Measured here, on bytes already in memory, rather than by fetching the
+  // photo back when the job finishes.
+  let width: number | null = null;
+  let height: number | null = null;
+  try {
+    const probed = imageSize(new Uint8Array(data));
+    width = probed.width ?? null;
+    height = probed.height ?? null;
+  } catch {
+    // Dimensions decorate the detail panel; not worth failing an upload for.
   }
-  await fsp.writeFile(target, data);
-  return target;
+
+  const [row] = await db
+    .insert(jobs)
+    .values({
+      userId,
+      kind,
+      state: "queued",
+      stage: "uploading",
+      options,
+      imageKey: stored.key,
+      imageName,
+      imageBytes: stored.bytes,
+      imageWidth: width,
+      imageHeight: height,
+      runSlug: slug,
+      log: [`uploaded ${imageName} (${Math.round(data.length / 1e3)} kB)`],
+    })
+    .returning();
+
+  try {
+    const callId = await modal.submit(data, modalOptions(options));
+    const [running] = await db
+      .update(jobs)
+      .set({
+        state: "running",
+        stage: "generating on modal",
+        modalCallId: callId,
+        startedAt: new Date(),
+        log: [...(row.log ?? []), `modal call ${callId}`],
+      })
+      .where(eq(jobs.id, row.id))
+      .returning();
+    return snapshot(running);
+  } catch (exc) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    const [failed] = await db
+      .update(jobs)
+      .set({
+        state: "failed",
+        stage: "",
+        error: message,
+        finishedAt: new Date(),
+        log: [...(row.log ?? []), message],
+      })
+      .where(eq(jobs.id, row.id))
+      .returning();
+    return snapshot(failed);
+  }
 }
 
-class Job {
-  state: JobState = "queued";
-  stage = "";
-  lines: string[] = [];
-  queuedAt = Date.now();
-  startedAt: number | null = null;
-  finishedAt: number | null = null;
-  returncode: number | null = null;
-  error = "";
-  proc: ChildProcess | null = null;
-
-  constructor(
-    public id: string,
-    public kind: JobKind,
-    public image: string, // absolute path into inputs/
-    public options: Record<string, string>,
-  ) {}
-
-  pushLine(line: string) {
-    this.lines.push(line);
-    if (this.lines.length > 400) this.lines.splice(0, this.lines.length - 400);
-  }
-
-  /** Which run this job will produce, for the viewer to jump to. */
-  get runId(): string {
-    const stem = path.basename(this.image, path.extname(this.image));
-    return this.kind === "room" ? stem : `${stem}.glb`;
-  }
-
-  snapshot(): JobSnapshot {
-    const end = this.finishedAt ?? Date.now();
-    return {
-      id: this.id,
-      kind: this.kind,
-      label: KINDS[this.kind].label,
-      image: path.basename(this.image),
-      image_url: `/api/files/inputs/${encodeURIComponent(path.basename(this.image))}`,
-      state: this.state,
-      stage: this.stage,
-      options: this.options,
-      run_id: this.runId,
-      elapsed: this.startedAt ? Math.round((end - this.startedAt) / 100) / 10 : 0,
-      waited: Math.round(((this.startedAt ?? Date.now()) - this.queuedAt) / 100) / 10,
-      returncode: this.returncode,
-      error: this.error,
-      log: this.lines.slice(-60),
-    };
-  }
+function contentTypeFor(name: string): string {
+  const suffix = name.slice(name.lastIndexOf(".")).toLowerCase();
+  return (
+    { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".bmp": "image/bmp" }[
+      suffix
+    ] ?? "application/octet-stream"
+  );
 }
 
-export class JobRunner {
-  private jobs = new Map<string, Job>();
-  private order: string[] = [];
-  private queue: Job[] = [];
-  private active: Job | null = null;
-  private counter = 0;
+/** Poll Modal for every running job of this user and finish the ones that are
+ * ready. Called from GET /api/jobs, which the viewer already polls. */
+export async function advanceJobs(userId: string): Promise<void> {
+  const db = getDb();
+  const running = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), inArray(jobs.state, ["queued", "running"])));
 
-  submit(kind: JobKind, image: string, options: Record<string, string>): JobSnapshot {
-    const job = new Job(`j${++this.counter}`, kind, image, options);
-    this.jobs.set(job.id, job);
-    this.order.push(job.id);
-    this.queue.push(job);
-    void this.pump();
-    return job.snapshot();
+  const live = running.filter((row) => row.modalCallId);
+  if (!live.length) return;
+
+  await Promise.all(live.map((row) => advanceOne(userId, row)));
+}
+
+async function advanceOne(userId: string, row: JobRow): Promise<void> {
+  const db = getDb();
+  let result: modal.ModalResult;
+  try {
+    result = await modal.collect(row.modalCallId!);
+  } catch (exc) {
+    console.error("[jobs] poll failed:", exc instanceof Error ? exc.message : exc);
+    return;
+  }
+  if (result.state === "pending") return;
+
+  if (result.state === "failed") {
+    await db
+      .update(jobs)
+      .set({
+        state: "failed",
+        stage: "",
+        error: result.error,
+        finishedAt: new Date(),
+        modalCallId: null,
+        log: [...(row.log ?? []), result.error],
+      })
+      .where(eq(jobs.id, row.id));
+    return;
   }
 
-  snapshot(): JobSnapshot[] {
-    return this.order.map((id) => this.jobs.get(id)!.snapshot());
-  }
+  // The mesh is here. Store it, write the run, then close the job - in that
+  // order, so a failure halfway leaves the job visibly unfinished rather than
+  // pointing at a run that has no bytes behind it.
+  try {
+    const slug = row.runSlug ?? stem(row.imageName);
+    const mesh = await writeBlob(
+      userKey(userId, slug, `${slug}.glb`),
+      result.glb,
+      "model/gltf-binary",
+    );
 
-  cancel(jobId: string): boolean {
-    const job = this.jobs.get(jobId);
-    if (!job || ["done", "failed", "cancelled"].includes(job.state)) return false;
-    if (job.state === "queued") {
-      job.state = "cancelled";
-      job.finishedAt = Date.now();
-      this.queue = this.queue.filter((queued) => queued !== job);
-      this.persist(job);
-      return true;
-    }
-    if (job.proc && job.proc.exitCode === null) {
-      // Blender, if this job got as far as assembly, is a grandchild and
-      // outlives the kill. It exits on its own once its input is gone.
-      job.proc.kill();
-      job.state = "cancelled";
-      return true;
-    }
-    return false;
-  }
-
-  // -- worker --------------------------------------------------------------
-
-  /** Best-effort history row in Neon; a missing database is fine. */
-  private persist(job: Job): void {
-    void recordJob(job.snapshot(), {
-      queuedAt: job.queuedAt,
-      startedAt: job.startedAt,
-      finishedAt: job.finishedAt,
+    await upsertRun(userId, {
+      slug,
+      kind: "object",
+      photoKey: row.imageKey,
+      photoName: row.imageName,
+      photoBytes: row.imageBytes,
+      photoWidth: row.imageWidth,
+      photoHeight: row.imageHeight,
+      renderKey: mesh.key,
+      renderBytes: mesh.bytes,
+      renderSha256: createHash("sha256").update(result.glb).digest("hex"),
     });
-  }
 
-  private command(job: Job): string[] {
-    const opt = job.options;
-    const cmd = ["-m", KINDS[job.kind].module, "--image", job.image];
-    if (job.kind === "object") {
-      cmd.push("--out", OUTPUTS_DIR);
-      if (opt.no_texture === "true" || opt.no_texture === "1") cmd.push("--no-texture");
-      if (opt.mc_resolution) cmd.push("--mc-resolution", String(parseInt(opt.mc_resolution, 10)));
-    } else {
-      for (const [flag, key] of [
-        ["--fov", "fov"],
-        ["--threshold", "threshold"],
-        ["--decimate", "decimate"],
-      ] as const) {
-        if (opt[key]) cmd.push(flag, String(parseFloat(opt[key])));
-      }
-      if (opt.walls) cmd.push("--walls", opt.walls);
-      if (opt.labels) cmd.push("--labels", opt.labels);
-    }
-    return cmd;
-  }
-
-  private environment(): NodeJS.ProcessEnv {
-    return {
-      ...process.env,
-      // The viewer may serve a directory that is not the configured one, and
-      // a result the viewer cannot see is not a result.
-      OUTPUT_DIR: OUTPUTS_DIR,
-      PYTHONUNBUFFERED: "1",
-      // Without UTF-8 mode the child encodes for the console codepage
-      // (cp1252 here) and rich's rules and arrows kill the run with a
-      // UnicodeEncodeError several minutes in.
-      PYTHONUTF8: "1",
-      PYTHONIOENCODING: "utf-8",
-      // rich formats for whatever terminal it thinks it has; through a pipe
-      // that means escape codes and box-drawing in the log tail.
-      NO_COLOR: "1",
-      TERM: "dumb",
-      COLUMNS: "100",
-    };
-  }
-
-  private async pump(): Promise<void> {
-    if (this.active) return;
-    const job = this.queue.shift();
-    if (!job) return;
-    if (job.state === "cancelled") return this.pump();
-    this.active = job;
-    try {
-      await this.run(job);
-      this.persist(job); // done, failed or cancelled mid-run
-    } finally {
-      this.active = null;
-      void this.pump();
-    }
-  }
-
-  private run(job: Job): Promise<void> {
-    return new Promise((resolve) => {
-      job.state = "running";
-      job.startedAt = Date.now();
-
-      const python = pythonExe();
-      if (!python) {
-        job.state = "failed";
-        job.error = "no Python interpreter found - set DREAMSPACE_PYTHON or run setup.ps1";
-        job.finishedAt = Date.now();
-        return resolve();
-      }
-
-      const cmd = this.command(job);
-      job.pushLine("$ " + cmd.slice(1).join(" ")); // as you would have typed it
-      let proc: ChildProcess;
-      try {
-        proc = spawn(python, cmd, {
-          cwd: ROOT,
-          env: this.environment(),
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (exc) {
-        job.state = "failed";
-        job.error = String(exc);
-        job.finishedAt = Date.now();
-        return resolve();
-      }
-
-      job.proc = proc;
-      let tail = "";
-      const consume = (chunk: Buffer) => {
-        tail += chunk.toString("utf8");
-        const pieces = tail.split(/\r?\n/);
-        tail = pieces.pop() ?? "";
-        for (const raw of pieces) {
-          const line = raw.trimEnd();
-          if (!line) continue;
-          job.pushLine(line);
-          const match = STAGE.exec(line);
-          if (match) job.stage = `${match[1]}/${match[2]} ${match[3].trim()}`;
-        }
-      };
-      proc.stdout?.on("data", consume);
-      proc.stderr?.on("data", consume);
-
-      proc.on("error", (exc) => {
-        job.state = "failed";
-        job.error = String(exc);
-        job.finishedAt = Date.now();
-        resolve();
-      });
-
-      proc.on("close", (code) => {
-        if (tail.trim()) job.pushLine(tail.trimEnd());
-        job.returncode = code;
-        job.finishedAt = Date.now();
-        if (job.state === "cancelled") return resolve();
-        if (code === 0) {
-          job.state = "done";
-          job.stage = "finished";
-        } else {
-          job.state = "failed";
-          job.stage = "";
-          // The last thing printed is nearly always the reason.
-          job.error =
-            [...job.lines].reverse().find((line) => line.trim()) ??
-            `exited with ${code}`;
-        }
-        resolve();
-      });
-    });
+    await db
+      .update(jobs)
+      .set({
+        state: "done",
+        stage: "finished",
+        finishedAt: new Date(),
+        modalCallId: null,
+        runSlug: slug,
+        log: [
+          ...(row.log ?? []),
+          `stored ${slug}.glb (${(mesh.bytes / 1e6).toFixed(1)} MB)`,
+        ],
+      })
+      .where(eq(jobs.id, row.id));
+  } catch (exc) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    await db
+      .update(jobs)
+      .set({
+        state: "failed",
+        stage: "",
+        error: `generated, but storing it failed: ${message}`,
+        finishedAt: new Date(),
+        modalCallId: null,
+        log: [...(row.log ?? []), message],
+      })
+      .where(eq(jobs.id, row.id));
   }
 }
 
-/** One runner per server process, surviving dev-server hot reloads. */
-const globalStore = globalThis as unknown as { __dreamspaceRunner?: JobRunner };
+export async function listJobs(userId: string, limit = 50): Promise<JobSnapshot[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.userId, userId))
+    .orderBy(desc(jobs.queuedAt))
+    .limit(limit);
+  // The viewer renders oldest-first in the sidebar.
+  return rows.reverse().map(snapshot);
+}
 
-export function getRunner(): JobRunner {
-  globalStore.__dreamspaceRunner ??= new JobRunner();
-  return globalStore.__dreamspaceRunner;
+export async function cancelJob(userId: string, jobId: string): Promise<boolean> {
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), eq(jobs.id, jobId)))
+    .limit(1);
+  if (!row || ["done", "failed", "cancelled"].includes(row.state)) return false;
+
+  if (row.modalCallId) await modal.cancel(row.modalCallId);
+  await db
+    .update(jobs)
+    .set({
+      state: "cancelled",
+      stage: "",
+      finishedAt: new Date(),
+      modalCallId: null,
+      log: [...(row.log ?? []), "cancelled"],
+    })
+    .where(eq(jobs.id, row.id));
+  return true;
 }

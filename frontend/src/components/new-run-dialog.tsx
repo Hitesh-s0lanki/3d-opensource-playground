@@ -36,13 +36,22 @@ interface NewRunDialogProps {
   onOpenChange: (open: boolean) => void;
   /** An image dropped onto the viewport, preselected into the form. */
   initialFile: File | null;
+  /** The room pipeline runs Blender and has no cloud implementation yet, so
+   * the option is shown but not selectable. */
+  roomAvailable: boolean;
   onSubmitted: () => void;
 }
 
 const MC_RESOLUTIONS = { default: "default", "128": "128 · fast", "192": "192", "256": "256 · fine" };
 const WALLS = { auto: "auto · far wall + the one with art", all: "all · closed box", none: "none · furniture only" };
 
-export function NewRunDialog({ open, onOpenChange, initialFile, onSubmitted }: NewRunDialogProps) {
+export function NewRunDialog({
+  open,
+  onOpenChange,
+  initialFile,
+  roomAvailable,
+  onSubmitted,
+}: NewRunDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [kind, setKind] = useState<JobKind>("object");
@@ -68,7 +77,9 @@ export function NewRunDialog({ open, onOpenChange, initialFile, onSubmitted }: N
     }
     const url = URL.createObjectURL(next);
     setPreview(url);
-    // A wide image is almost always a room, not an object.
+    // A wide image is almost always a room, not an object - but only offer
+    // that when the room pipeline can actually run.
+    if (!roomAvailable) return;
     const probe = new Image();
     probe.onload = () => {
       if (probe.naturalWidth >= probe.naturalHeight * 1.5) setKind("room");
@@ -126,7 +137,7 @@ export function NewRunDialog({ open, onOpenChange, initialFile, onSubmitted }: N
         <DialogHeader>
           <DialogTitle className="font-display text-2xl font-bold text-ink">New run</DialogTitle>
           <DialogDescription className="font-display text-[14px] italic leading-snug text-ink-muted">
-            The upload lands in inputs/ and runs the same command you would have typed. Jobs run
+            The upload goes straight to blob storage and queues a job. Jobs run
             one at a time — a 4 GB card fits one reconstruction.
           </DialogDescription>
         </DialogHeader>
@@ -164,19 +175,26 @@ export function NewRunDialog({ open, onOpenChange, initialFile, onSubmitted }: N
             {(
               [
                 ["object", "Single object", "one image → one mesh"],
-                ["room", "Whole room", "detect → reconstruct → layout → assemble"],
+                ["room", "Whole room", "not in the cloud yet — needs Blender"],
               ] as const
-            ).map(([value, title, hint]) => (
-              <Label
-                key={value}
-                className={`flex cursor-pointer flex-col items-start gap-1 rounded-lg border p-3 ${kind === value ? "border-ring bg-accent" : "hover:bg-muted/60"}`}
-              >
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <RadioGroupItem value={value} /> {title}
-                </span>
-                <span className="text-[11px] leading-tight text-muted-foreground">{hint}</span>
-              </Label>
-            ))}
+            ).map(([value, title, hint]) => {
+              const disabled = value === "room" && !roomAvailable;
+              return (
+                <Label
+                  key={value}
+                  className={`flex flex-col items-start gap-1 rounded-lg border p-3 ${
+                    disabled
+                      ? "cursor-not-allowed opacity-50"
+                      : `cursor-pointer ${kind === value ? "border-ring bg-accent" : "hover:bg-muted/60"}`
+                  }`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <RadioGroupItem value={value} disabled={disabled} /> {title}
+                  </span>
+                  <span className="text-[11px] leading-tight text-muted-foreground">{hint}</span>
+                </Label>
+              );
+            })}
           </RadioGroup>
 
           {/* per-kind flags */}

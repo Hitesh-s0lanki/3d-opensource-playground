@@ -1,7 +1,7 @@
 /** Shared shapes between the API routes and the client.
  *
- * These mirror what the Python viewer's `runs.py` and `jobs.py` emit, so the
- * two frontends stay interchangeable against the same outputs/ directory.
+ * `url` fields point at `/api/files/<blob key>`, never at storage directly:
+ * that route is where the caller is checked against the key's owner.
  */
 
 export type Box = [number, number, number, number];
@@ -56,10 +56,12 @@ export interface Run {
 }
 
 export interface RunsPayload {
-  root: string;
-  inputs: string;
-  can_generate: boolean;
-  /** The Neon catalog: configured at all, and did the last sync succeed. */
+  /** Why a run cannot be started - Modal or blob storage unconfigured - or
+   * null when one can be. Disables the new-run dialog, and says why. */
+  generate_blocked: string | null;
+  /** The room pipeline has no cloud implementation yet. */
+  room_available: boolean;
+  /** The Neon catalog: configured at all, and did the last read succeed. */
   db: { enabled: boolean; synced: boolean };
   runs: Run[];
 }
