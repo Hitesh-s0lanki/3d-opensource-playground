@@ -12,10 +12,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from ..config import PROJECT_ROOT, Config
-from .spec import SceneSpec
+from src.config import PROJECT_ROOT, Config
+from src.schemas.scene import SceneSpec
 
-SENTINEL = "DREAMSPACE_ASSEMBLE_OK"
+SENTINEL = "DIORAMIC_ASSEMBLE_OK"
 
 BUILD_SCRIPT = Path(__file__).resolve().parent / "blender" / "build_scene.py"
 

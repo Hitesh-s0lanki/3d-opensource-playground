@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .spec import ObjectSpec, RoomSpec, SceneSpec
+from src.schemas.scene import ObjectSpec, RoomSpec, SceneSpec
 
 FLOOR, WALL, CEILING = "floor", "wall", "ceiling"
 

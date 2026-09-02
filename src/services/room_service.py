@@ -24,14 +24,31 @@ from pathlib import Path
 
 from PIL import Image
 
-from ..config import Config
-from .assemble import assemble
-from .layout import Camera, estimate_layout
-from .segment import segment
-from .spec import SceneSpec, SourceSpec
+from src.config import Config
+from src.schemas.scene import SceneSpec, SourceSpec
+from src.services.assembly_service import assemble
+from src.services.layout_service import Camera, estimate_layout
+from src.services.segmentation_service import segment
 
 
 MIN_FACES = 200
+
+
+def parse_walls(choice: str):
+    """Turn the `--walls` / `walls` string into what build_room expects.
+
+    Shared by the CLI and the API because "auto" is a sentinel the layout code
+    reads, not a list of walls - so the two callers have to agree on passing the
+    string through untouched rather than each inventing a default.
+    """
+    choice = (choice or "auto").strip().lower()
+    if choice == "auto":
+        return "auto"
+    if choice == "all":
+        return ("-x", "+x", "-y", "+y")
+    if choice == "none":
+        return ()
+    return tuple(part.strip() for part in choice.split(",") if part.strip())
 
 
 def is_usable(mesh_path: Path, console) -> bool:
@@ -72,24 +89,21 @@ class RoomResult:
 
 
 def _generate_in_process(crops, config, console) -> dict[str, Path]:
-    """Generate every mesh with one resident model."""
-    from ..backends import get_backend
+    """Generate every mesh with one resident model.
 
-    backend = get_backend(config.backend, config, console)
-    backend.load()
+    One bad crop must not cost the whole room, which is exactly what
+    generate_meshes already guarantees - a wardrobe that OOMs is a missing
+    wardrobe, not a failed job - so failures are simply absent from the result.
+    """
+    from src.services.generation_service import generate_meshes
 
-    meshes: dict[str, Path] = {}
-    for index, (name, crop_path) in enumerate(crops, start=1):
-        console.rule(f"[bold]{index}/{len(crops)}  {name}")
-        try:
-            meshes[name] = backend.generate(crop_path, name)
-        except Exception as exc:
-            # One bad crop must not cost the whole room. A wardrobe that OOMs
-            # is a missing wardrobe, not a failed job.
-            console.print(f"[red]{name} failed:[/] {type(exc).__name__}: {exc}")
-        finally:
-            backend.unload()
-    return meshes
+    results = generate_meshes([crop_path for _, crop_path in crops], config, console)
+    by_image = {result.image: result for result in results}
+    return {
+        name: by_image[crop_path].mesh
+        for name, crop_path in crops
+        if by_image[crop_path].ok
+    }
 
 
 def _generate_in_subprocesses(crops, config, jobs, console) -> dict[str, Path]:
@@ -101,7 +115,7 @@ def _generate_in_subprocesses(crops, config, jobs, console) -> dict[str, Path]:
     def run_one(item):
         name, crop_path = item
         cmd = [
-            sys.executable, "-m", "dreamspace.cli.generate",
+            sys.executable, "-m", "src.cli.generate",
             "--image", str(crop_path),
             "--out", str(config.output_dir),
         ]
@@ -162,7 +176,7 @@ def build_room(
 
     # -- 2. a mesh for each --------------------------------------------------
     console.rule("[bold]2/4  reconstruct")
-    from .layout import lookup_prior
+    from src.services.layout_service import lookup_prior
 
     pending = []
     meshes: dict[str, Path] = {}

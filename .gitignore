@@ -1,16 +1,31 @@
+# --- Python -----------------------------------------------------------------
 .venv/
-.env
-outputs/
-inputs/
-vendor/
-.cache/
 __pycache__/
 *.py[cod]
 *.egg-info/
 build/
 dist/
+.ipynb_checkpoints/
+
+# --- secrets ----------------------------------------------------------------
+.env
+
+# --- generated data ---------------------------------------------------------
+# The app keeps nothing on disk - runs live in Neon, binaries in blob storage.
+# The rule below only exists because the local Python CLI still writes meshes
+# somewhere (OUTPUT_DIR, default outputs/), and those must never be committed.
+outputs/
+.cache/
+
+# Upstream projects ship as repositories, not packages; backends/base.py clones
+# them here on first run.
+vendor/
+
+# --- model and mesh binaries ------------------------------------------------
 *.glb
 *.obj
 *.ckpt
 *.safetensors
+
+# --- tooling scratch --------------------------------------------------------
 .playwright/

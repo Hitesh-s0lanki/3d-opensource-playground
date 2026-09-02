@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dreamspace"
-version = "0.2.0"
-description = "Image to 3D: single objects today, whole rooms next."
+name = "dioramic"
+version = "0.3.0"
+description = "Image to 3D: a FastAPI backend over a Modal GPU worker, plus the CLI."
 requires-python = ">=3.10"
 readme = "README.md"
 
@@ -14,29 +14,30 @@ readme = "README.md"
 # it directly, so duplicating the list here would guarantee the two drift apart.
 dynamic = ["dependencies"]
 
-# The Modal client is only needed to drive modal_app/, which is a separate
-# process talking to a rented GPU. Nothing under src/ imports it, so it stays
-# out of the base install:  uv pip install -e ".[modal]"
+# The Modal client is what the API uses to reach the GPU, but the CLI, the room
+# pipeline and Blender assembly all work without it - and it is a heavy import -
+# so it stays an extra:  uv pip install -e ".[modal]"
+# services/modal_service.py imports it lazily and says so when it is missing.
 [project.optional-dependencies]
 modal = ["modal>=1.0"]
 
 [project.scripts]
-dreamspace-generate = "dreamspace.cli.generate:main"
-dreamspace-room = "dreamspace.cli.room:main"
-dreamspace-assemble = "dreamspace.cli.assemble:main"
-dreamspace-view = "dreamspace.cli.view:main"
+dioramic-generate = "src.cli.generate:main"
+dioramic-room = "src.cli.room:main"
+dioramic-assemble = "src.cli.assemble:main"
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 
+# `src` is the package, not a directory of packages: this is an application
+# imported as `src.services.x` and run as `uvicorn src.main:app`, so the repo
+# root is what goes on sys.path.
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 # build_scene.py is executed by Blender's own interpreter, never imported by
-# ours, but it still has to ship inside the package so assemble.py can find it
-# on disk next to the module that launches it.
+# ours, but it still has to ship inside the package so assembly_service.py can
+# find it on disk next to the module that launches it.
 [tool.setuptools.package-data]
-"dreamspace.scene.blender" = ["*.py"]
-# The viewer page is read off disk and served verbatim, so it has to be
-# installed alongside view.py rather than compiled into it.
-"dreamspace.cli" = ["viewer/*.html"]
+"src.services.blender" = ["*.py"]

@@ -9,11 +9,11 @@ This is the other half of `modal deploy hunyuan3d.py`. The app already exists in
 the workspace, so there is nothing to create - look the class up by name and call
 it. Deploy once:
 
-    modal deploy modal_app/hunyuan3d.py
+    modal deploy scripts/modal_app/hunyuan3d.py
 
 then this script is a plain Python program, not a `modal run` target:
 
-    python modal_app/call.py --image inputs/chair.png
+    python scripts/modal_app/call.py --image photos/chair.png
 
 To be clear about what this does and does not save: the GPU time, the cold start
 and the weight loading are identical either way. What goes away is the per-call
@@ -33,7 +33,7 @@ import modal
 # Must match modal.App(APP_NAME) and the class name in hunyuan3d.py. A deployed
 # app is addressed by name - there is no URL unless a web endpoint is declared,
 # and this one declares none.
-APP_NAME = "dreamspace-hunyuan3d"
+APP_NAME = "dioramic-hunyuan3d"
 CLASS_NAME = "Hunyuan3D"
 
 # The defaults and the image-collection rule live in hunyuan3d.py so the two
@@ -45,9 +45,9 @@ from hunyuan3d import _collect  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="modal_app/call.py",
+        prog="scripts/modal_app/call.py",
         description="Generate a 3D mesh on the deployed Modal app.",
-        epilog="Requires `modal deploy modal_app/hunyuan3d.py` to have been run once.",
+        epilog="Requires `modal deploy scripts/modal_app/hunyuan3d.py` to have been run once.",
     )
     p.add_argument("--image", required=True, help="Image file, or a directory of images.")
     p.add_argument("--out", default="outputs", help="Local output directory.")
@@ -79,7 +79,7 @@ def main() -> int:
         # The single most likely failure here, and the message Modal gives for it
         # is about a missing object rather than about the thing you forgot to do.
         print(f"'{APP_NAME}' is not deployed in this workspace.\n"
-              f"Run:  modal deploy modal_app/hunyuan3d.py")
+              f"Run:  modal deploy scripts/modal_app/hunyuan3d.py")
         return 1
 
     out_dir = Path(args.out)
