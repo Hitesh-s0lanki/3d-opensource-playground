@@ -29,3 +29,17 @@ vendor/
 
 # --- tooling scratch --------------------------------------------------------
 .playwright/
+
+# --- JavaScript -------------------------------------------------------------
+# frontend/.gitignore covers these as well, but a .gitignore only governs its
+# own directory downwards, so those rules vanish the moment the app is moved or
+# a second one appears. Renaming web/ to frontend/ put 40k node_modules files in
+# `git status` for exactly that reason. These are rooted nowhere, so they hold
+# wherever the app lives.
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+.env.local
