@@ -1,5 +1,5 @@
 {
-  "id": "484f6cf2-5985-48e3-bafb-7d6b0c843b65",
+  "id": "109f8ac5-fd4c-4f2e-b606-4cf95d291cd7",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -10,12 +10,13 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
+          "type": "uuid",
           "primaryKey": true,
-          "notNull": true
+          "notNull": true,
+          "default": "gen_random_uuid()"
         },
-        "local_id": {
-          "name": "local_id",
+        "user_id": {
+          "name": "user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -23,18 +24,6 @@
         "kind": {
           "name": "kind",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "image": {
-          "name": "image",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "options": {
-          "name": "options",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
@@ -56,14 +45,50 @@
           "primaryKey": false,
           "notNull": false
         },
-        "returncode": {
-          "name": "returncode",
+        "options": {
+          "name": "options",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "image_key": {
+          "name": "image_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "image_name": {
+          "name": "image_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "image_bytes": {
+          "name": "image_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_width": {
+          "name": "image_width",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
-        "run_id": {
-          "name": "run_id",
+        "image_height": {
+          "name": "image_height",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "modal_call_id": {
+          "name": "modal_call_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "run_slug": {
+          "name": "run_slug",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -78,7 +103,8 @@
           "name": "queued_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "now()"
         },
         "started_at": {
           "name": "started_at",
@@ -93,7 +119,50 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "jobs_user_queued": {
+          "name": "jobs_user_queued",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "queued_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "jobs_user_state": {
+          "name": "jobs_user_state",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -113,7 +182,7 @@
         },
         "run_id": {
           "name": "run_id",
-          "type": "text",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
@@ -135,8 +204,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "crop_path": {
-          "name": "crop_path",
+        "crop_key": {
+          "name": "crop_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -147,8 +216,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "mesh_path": {
-          "name": "mesh_path",
+        "mesh_key": {
+          "name": "mesh_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -259,8 +328,21 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "text",
+          "type": "uuid",
           "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "kind": {
@@ -269,9 +351,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "photo_key": {
+          "name": "photo_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "photo_name": {
           "name": "photo_name",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "photo_bytes": {
+          "name": "photo_bytes",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -287,8 +381,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "render_path": {
-          "name": "render_path",
+        "render_key": {
+          "name": "render_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -299,21 +393,15 @@
           "primaryKey": false,
           "notNull": false
         },
-        "render_mtime": {
-          "name": "render_mtime",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "render_sha256": {
           "name": "render_sha256",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "spec_path": {
-          "name": "spec_path",
-          "type": "text",
+        "spec": {
+          "name": "spec",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -323,8 +411,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "first_seen_at": {
-          "name": "first_seen_at",
+        "created_at": {
+          "name": "created_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
@@ -338,7 +426,50 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "runs_user_slug": {
+          "name": "runs_user_slug",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slug",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "runs_user_updated": {
+          "name": "runs_user_updated",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

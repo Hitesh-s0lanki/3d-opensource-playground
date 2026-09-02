@@ -24,7 +24,7 @@ export function ViewerApp() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [droppedImage, setDroppedImage] = useState<File | null>(null);
 
-  // A run to jump to once discovery sees it - set when its job finishes.
+  // A run to jump to once the catalog has it - set when its job finishes.
   const pendingJump = useRef<string | null>(null);
   const knownJobStates = useRef<Map<string, string>>(new Map());
 
@@ -141,7 +141,10 @@ export function ViewerApp() {
           setDroppedImage(null);
           setDialogOpen(true);
         }}
-        canGenerate={payload?.can_generate ?? false}
+        // Until the first /api/runs answer lands - and if it never does,
+        // because the catalog is down - the button stays live: submitting is a
+        // separate path, and a real error beats a dead control.
+        generateBlocked={payload ? payload.generate_blocked : null}
         db={payload?.db ?? { enabled: false, synced: false }}
       />
 
@@ -164,6 +167,7 @@ export function ViewerApp() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         initialFile={droppedImage}
+        roomAvailable={payload?.room_available ?? false}
         onSubmitted={() => void refreshJobs()}
       />
     </div>

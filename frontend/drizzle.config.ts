@@ -6,7 +6,7 @@ export default defineConfig({
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
-    // Set in web/.env (see .env.example) - the Neon connection string.
+    // Set in frontend/.env (see .env.example) - the Neon connection string.
     url: process.env.DATABASE_URL ?? "",
   },
 });

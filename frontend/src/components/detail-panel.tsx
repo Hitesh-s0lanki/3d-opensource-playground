@@ -185,7 +185,7 @@ export function DetailPanel({ run, selected, onSelect }: DetailPanelProps) {
           </Section>
         ) : (
           <p className="text-xs text-muted-foreground">
-            No source photo found in inputs/ for this run.
+            No source photo for this run.
           </p>
         )}
 
@@ -247,7 +247,7 @@ export function DetailPanel({ run, selected, onSelect }: DetailPanelProps) {
               </div>
               {run.kind === "scene" && (
                 <p className="font-display pt-1 text-[13px] italic leading-snug text-ink-muted">
-                  A scene.json beside its GLB — edit it and rebuild with dreamspace-assemble,
+                  A scene.json beside its GLB — edit it and rebuild with dioramic-assemble,
                   without re-running any model.
                 </p>
               )}

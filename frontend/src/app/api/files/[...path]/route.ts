@@ -1,21 +1,15 @@
-/** Serve one file from the outputs/ or inputs/ tree.
+/** Stream one stored blob back to its owner.
  *
- * The 3D meshes and photos live outside the Next.js project, so they get a
- * file route rather than /public. A URL is not allowed to walk out of the
- * directory it addresses.
+ * Blobs are written `private`, so they have no publicly fetchable URL. This is
+ * the only way to read one, and the check is the key prefix: every key this
+ * app writes is `u/<userId>/...`, so a key that does not start with the
+ * caller's own prefix is not theirs and is answered as a 404 rather than a
+ * 403 - there is no reason to confirm that someone else's file exists.
  */
 
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { INPUTS_DIR, OUTPUTS_DIR, insideDir } from "@/lib/paths";
+import { errorResponse, requireUserId } from "@/lib/auth";
+import { ownsKey, readBlob } from "@/lib/storage";
 
-const MOUNTS: Record<string, string> = {
-  outputs: OUTPUTS_DIR,
-  inputs: INPUTS_DIR,
-};
-
-// Node has no glTF entries in any built-in table; without these the meshes
-// would go out as application/octet-stream.
 const MIME: Record<string, string> = {
   ".glb": "model/gltf-binary",
   ".gltf": "model/gltf+json",
@@ -25,37 +19,36 @@ const MIME: Record<string, string> = {
   ".webp": "image/webp",
   ".bmp": "image/bmp",
   ".json": "application/json; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
 };
+
+const notFound = () => Response.json({ error: "no such file" }, { status: 404 });
 
 export async function GET(
   _req: Request,
   ctx: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
-  const { path: segments } = await ctx.params;
-  const [mount, ...rest] = segments;
-  const base = MOUNTS[mount];
-  if (!base || rest.length === 0) {
-    return Response.json({ error: "no such mount" }, { status: 404 });
-  }
-
-  const target = path.resolve(base, rest.join("/"));
-  if (!insideDir(base, target)) {
-    return Response.json({ error: "no such file" }, { status: 404 });
-  }
-
   try {
-    const body = await fsp.readFile(target);
-    return new Response(new Uint8Array(body), {
+    const userId = await requireUserId();
+    const { path: segments } = await ctx.params;
+    if (!segments?.length) return notFound();
+
+    const key = segments.map((segment) => decodeURIComponent(segment)).join("/");
+    if (!ownsKey(userId, key)) return notFound();
+
+    const found = await readBlob(key);
+    if (!found) return notFound();
+
+    const dot = key.lastIndexOf(".");
+    const suffix = dot > 0 ? key.slice(dot).toLowerCase() : "";
+    return new Response(found.stream, {
       headers: {
-        "Content-Type": MIME[path.extname(target).toLowerCase()] ?? "application/octet-stream",
-        "Content-Length": String(body.length),
-        // The page polls for new results; stale bytes would hide them.
-        "Cache-Control": "no-store",
+        "Content-Type": MIME[suffix] ?? found.contentType,
+        // Private to this user, but the bytes never change under a key that
+        // is rewritten wholesale, so the browser may keep them for a session.
+        "Cache-Control": "private, max-age=300",
       },
     });
-  } catch {
-    return Response.json({ error: "no such file" }, { status: 404 });
+  } catch (exc) {
+    return errorResponse(exc);
   }
 }
