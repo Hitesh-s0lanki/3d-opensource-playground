@@ -22,6 +22,7 @@ dynamic = ["dependencies"]
 modal = ["modal>=1.0"]
 
 [project.scripts]
+dioramic-api = "src.main:main"
 dioramic-generate = "src.cli.generate:main"
 dioramic-room = "src.cli.room:main"
 dioramic-assemble = "src.cli.assemble:main"

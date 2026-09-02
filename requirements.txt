@@ -39,6 +39,14 @@ PyMCubes>=0.1.4
 rembg>=2.0.50
 onnxruntime>=1.17.0         # swap for onnxruntime-gpu only if you free up VRAM
 
+# --- API -------------------------------------------------------------------
+# The version floor is where FastAPI learned to bind a Pydantic model to
+# multipart form fields, which is what routes/rooms.py relies on to take an
+# upload and its options in one request.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9     # required for File()/Form(); FastAPI will not start without it
+
 # --- CLI / config ----------------------------------------------------------
 python-dotenv>=1.0.0
 rich>=13.7.0
