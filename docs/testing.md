@@ -74,28 +74,23 @@ Real photographs, cluttered rooms and other room types are untested.
 **No regression fixtures.** There is no stored "known good" GLB to diff
 against, so a change that quietly degrades output would pass both scripts.
 
-## Reproducing the sample end to end
+## Running the pipeline end to end
+
+No sample photo ships with the repo - point `--image` at one of your own.
 
 ```powershell
 # ~18 minutes cold, ~30 s with cached meshes
-dreamspace-room --image inputs\bedroom.jpg --decimate 0.2
+dioramic-room --image photos\bedroom.jpg --decimate 0.2
 
 # then verify
 blender --background --factory-startup --python scripts\verify_scene.py -- `
     --glb outputs\bedroom.glb --spec outputs\bedroom\scene.json
 ```
 
-For a fast assembly-only loop that needs no models at all, use the hand-written
-example — it runs in seconds against meshes already in `outputs/`:
-
-```powershell
-dreamspace-assemble --spec examples\room-demo.json
-```
-
 ## Checking the environment
 
 ```powershell
-dreamspace-generate --doctor
+dioramic-generate --doctor
 ```
 
 Reports Python, torch, the CUDA build, VRAM, the marching-cubes shim, every

@@ -1,8 +1,7 @@
-# diorama
+# dioramic
 
-The browser inspector for the dreamspace pipeline, rebuilt as a Next.js app —
-the successor to `dreamspace-view`. It serves the same `outputs/` directory,
-draws the same run graph, and starts the same CLIs.
+The app. A signed-in browser client that turns a photo into a 3D object on a
+rented GPU, and keeps everything it produces per user, off this machine.
 
 ```
 sidebar          stage                       detail
@@ -17,94 +16,110 @@ jobs    │  (three.js)               │  from, boxes drawn on
 ## Run it
 
 ```powershell
-cd web
+cd frontend
 npm install
-npm run dev          # http://localhost:3000
+Copy-Item .env.example .env          # then fill it in
+npm run db:migrate                   # create the tables
+npm run dev                          # http://localhost:3000
 ```
 
-The app finds the repo root (the folder with `outputs/`, `inputs/` and
-`.venv/`) as its parent directory. Override with env vars if the layout
-differs:
+Four services, all with free tiers, all required — there is no local
+fallback mode any more:
 
-| variable | default | meaning |
+| variable | from | holds |
 |---|---|---|
-| `DREAMSPACE_ROOT` | `..` | repo root |
-| `DREAMSPACE_OUTPUTS` | `<root>/outputs` | where runs live |
-| `DREAMSPACE_INPUTS` | `<root>/inputs` | where source photos live |
-| `DREAMSPACE_PYTHON` | `<root>/.venv/Scripts/python.exe` | interpreter that runs the pipeline |
+| `DATABASE_URL` | [Neon](https://console.neon.tech) | runs, jobs, placements |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | [Clerk](https://dashboard.clerk.com) | who each row belongs to |
+| `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob | photo and mesh bytes |
+| `MODAL_ENDPOINT`, `MODAL_TOKEN` | `modal deploy scripts/modal_app/hunyuan3d.py` | the GPU |
 
-Without a venv the app still works read-only; the **+ New** button explains
-what is missing.
+Every one is documented in [.env.example](.env.example).
+
+## Nothing is stored locally
+
+There is no `outputs/` directory, no `inputs/`, no venv, and no subprocess.
+The three modules that used to walk the filesystem — `discover.ts`,
+`paths.ts`, `db/sync.ts` — are gone.
+
+```
+upload ──> blob storage   u/<userId>/<slug>/photo.jpg
+             │
+             └─ bytes ──> Modal (Hunyuan3D-2.1) ──> .glb bytes
+                                                      │
+                            blob storage <────────────┘
+                              u/<userId>/<slug>/<slug>.glb
+                                     ▲
+                            Neon row points at both keys
+```
+
+**Every row belongs to one Clerk user.** `userId` is a column on `runs` and
+`jobs`; `run_items` inherits it through its run. There is no query in the app
+that reads a run without naming its owner, and no shared or global scope.
+
+**Every blob key starts `u/<userId>/`.** Blobs are written `private`, so they
+have no publicly fetchable URL; the only way to read one is
+`GET /api/files/<key>`, which checks the prefix against the caller and answers
+404 — not 403 — for someone else's key, since there is no reason to confirm
+that another user's file exists.
+
+## Jobs, without a worker
+
+A textured generation takes 60–105 seconds, longer than a serverless request
+should stay open, and there is no background worker to wait on it. So a job is
+a row plus a Modal call id:
+
+| | |
+|---|---|
+| `POST /api/jobs` | store the photo, insert the row, `spawn` the Modal call, save its id |
+| `GET /api/jobs` | for each running row, ask Modal if it is done; if so store the mesh, write the run, close the job |
+
+The viewer already polled `/api/jobs` every two seconds, and that poll is now
+the mechanism. Because no state is held in process memory between the two,
+a redeploy, a cold start, or the user closing the tab mid-generation loses
+nothing — the next poll from any session picks it up.
+
+Jobs no longer queue. The one-at-a-time rule existed because two concurrent
+TripoSR runs OOM a 4 GB card; Modal gives each call its own container.
 
 ## What it does
 
-- **Runs, not files.** `/api/runs` walks `outputs/` back into runs — `room`,
-  `scene`, `object`, `images` — with the same naming-convention logic as the
-  Python viewer's `runs.py`. New runs appear on their own; no refresh.
+- **Runs, not files.** `/api/runs` reads this user's rows. New runs appear on
+  their own; no refresh.
 - **three.js stage.** Orbit controls (drag to orbit, right-drag to pan, scroll
   to zoom — zooming aims at the cursor, and **double-click re-pivots the orbit**
   onto the clicked spot, or re-frames the model from empty space), environment
-  lighting, and the original keyboard shortcuts: `F` fit, `W` wireframe, `G`
-  ground grid (1 m / 0.25 m / 0.1 m by object size), `B` bounding box, `E` dark
-  backdrop, `R` spin, `↑`/`↓` previous / next object in the run. Drop a `.glb`
-  from anywhere onto the viewport to inspect it.
+  lighting, and the keyboard shortcuts: `F` fit, `W` wireframe, `G` ground grid
+  (1 m / 0.25 m / 0.1 m by object size), `B` bounding box, `E` dark backdrop,
+  `R` spin, `↑`/`↓` previous / next object in the run. Drop a `.glb` from
+  anywhere onto the viewport to inspect it.
 - **Provenance.** Click a box on the photo, or a tile in the pipeline strip,
   and the detail column becomes that object's story: the patch of photograph,
   the crop, the mesh that came back, and where it was placed. Detector boxes
-  come from `scene.json`; for older runs the `.provenance.json` cache written
-  by the Python viewer is read as-is (recovering boxes by template match stays
-  a Python-side job).
-- **Generation.** **+ New** (or dropping an image onto the viewport) uploads
-  into `inputs/` and spawns `dreamspace-generate` or `dreamspace-room` from the
-  repo venv, streaming output into a job card with the current stage and a
-  Stop button. Jobs run one at a time — two concurrent TripoSR runs OOM a 4 GB
-  card. A wide image preselects *Whole room*.
-- **File serving.** `/api/files/outputs/...` and `/api/files/inputs/...` serve
-  meshes and photos with correct glTF MIME types; paths cannot escape either
-  directory, uploads are capped at 40 MB and stripped to a tame basename.
+  come from the run's `spec` column.
+- **Generation.** **+ New**, or dropping an image onto the viewport. *Whole
+  room* is shown but disabled: that pipeline's last stage is Blender and it
+  has not been ported to Modal.
 
 ## Database — Neon Postgres + Drizzle ORM
 
-Optional but recommended: a durable catalog of everything the pipeline has
-produced, in [Neon](https://neon.tech). Setup:
+`npm run db:migrate` applies [drizzle/](drizzle/); `npm run db:studio` opens
+Drizzle Studio on the live tables.
 
-```powershell
-cd web
-copy .env.example .env     # paste your Neon connection string into it
-npm run db:push            # create the tables
-npm run dev
-```
-
-The sidebar footer shows a green **neon** dot once syncing works.
-
-What gets stored, and when:
-
-- **`runs`** — one row per run, upserted automatically whenever `/api/runs`
-  discovers something new or changed (so every newly generated result lands in
-  the catalog by itself): kind, source photo + dimensions, the assembled GLB's
-  path / size / mtime and a **SHA-256 of its bytes**, the scene.json path and
-  room parameters.
+- **`runs`** — one per generation: `userId`, a `slug` unique per user, kind,
+  the photo's blob key and dimensions, the mesh's blob key, size and
+  **SHA-256**, and `spec` — what used to be `scene.json` on disk, now jsonb.
 - **`run_items`** — every object inside a run: status (placed / dropped /
-  orphan), crop and mesh paths + sizes, position, target size, rotation,
+  orphan), crop and mesh keys + sizes, position, target size, rotation,
   detection box, label and confidence.
-- **`jobs`** — a history row for every generation the viewer ran: kind, image,
-  CLI options, final state, exit code, error, the log tail, and queued /
-  started / finished timestamps.
+- **`jobs`** — one per generation, live and historical: state, stage, error,
+  options, the uploaded photo's key, the Modal call id while in flight, the
+  log, and queued / started / finished timestamps.
 
-Rows are never deleted by the sync: a run whose files get cleaned out of
-`outputs/` stays in the catalog as history. `GET /api/catalog` returns the
-whole record (all runs ever seen + the last 200 jobs); `npm run db:studio`
-opens Drizzle Studio on the live tables.
+Bytes stay out of Postgres deliberately. A GLB is 4–22 MB; Neon's free tier is
+0.5 GB and its HTTP driver is a poor pipe for values that size. The rows carry
+the key, the size and the hash instead.
 
-The GLB **bytes** deliberately stay on disk — Postgres rows are the wrong home
-for 20 MB meshes (the serverless driver caps payloads well below that, and the
-free tier is 0.5 GB); the catalog stores their path, size and hash instead. If
-the meshes ever need to live off-machine, that is an object-storage job (S3 /
-Vercel Blob), and the schema already has the columns to point at it.
-
-Without `DATABASE_URL` everything still works file-only — the database layer
-is a strict add-on and every write is best-effort, so a down database never
-breaks the viewer.
+`GET /api/catalog` returns this user's rows raw.
 
 ## Design
 

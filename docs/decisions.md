@@ -171,6 +171,7 @@ ceiling — `transformers <5` because TripoSR's checkpoint predates the v5
 renaming, `numpy <2` because it breaks rembg and xatlas — and two lists would
 inevitably drift.
 
-`setup.ps1` installs the package with `--no-deps` after resolving
-requirements.txt, so a pyproject resolution cannot pull torch from PyPI and
-clobber the CUDA build.
+The removed `setup.ps1` installed the package with `--no-deps` after resolving
+requirements.txt, so a pyproject resolution could not pull torch from PyPI and
+clobber the CUDA build. Anyone installing the pipeline source by hand still
+needs that ordering.

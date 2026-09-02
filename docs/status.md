@@ -11,11 +11,11 @@ numpy 1.26.4, Blender 5.3.0 Alpha (its own Python 3.13.13).
 | Component | State |
 |---|---|
 | `src/` package layout, editable install, 4 console scripts | done |
-| Single image → mesh (`dreamspace-generate`) | done, pre-existing |
-| Object detection (`scene/segment.py`) | done, 10/10 correct on the sample |
-| Layout estimation (`scene/layout.py`) | done, approximate by design |
+| Single image → mesh (`dioramic-generate`) | done, pre-existing |
+| Object detection (`services/segmentation_service.py`) | done, 10/10 correct on the sample |
+| Layout estimation (`services/layout_service.py`) | done, approximate by design |
 | Blender assembly (`scene/blender/build_scene.py`) | done, verified |
-| Orchestrator (`dreamspace-room`) | done, verified end to end |
+| Orchestrator (`dioramic-room`) | done, verified end to end |
 | Two-wall cutaway, auto wall selection | done |
 | Flat objects as textured panels | done |
 | Degenerate-mesh rejection | done |
@@ -24,7 +24,7 @@ numpy 1.26.4, Blender 5.3.0 Alpha (its own Python 3.13.13).
 
 ## The sample run
 
-`dreamspace-room --image inputs/bedroom.jpg --decimate 0.2` on a 1400×777
+`dioramic-room --image photos/bedroom.jpg --decimate 0.2` on a 1400×777
 interior render.
 
 **Detection — 10 objects, all real:**

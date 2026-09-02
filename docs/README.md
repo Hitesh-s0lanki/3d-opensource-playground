@@ -1,6 +1,19 @@
-# dreamspace docs
+# dioramic docs
 
 Notes on how this project is built, what has been verified, and what is left.
+
+> **These describe the pipeline source, not the app.** dioramic is now a
+> signed-in web app: photos and meshes live in blob storage, runs and jobs in
+> Neon, generation on a Modal GPU, nothing on the machine running it. Setup is
+> [../frontend/README.md](../frontend/README.md).
+>
+> The Python backend in `src/` is a FastAPI service (`uvicorn src.main:app`)
+> that hands single-object generation to the Modal GPU worker, plus the CLI
+> over the same services. It also holds the **room** pipeline, which has not
+> been ported to the cloud — its last stage drives Blender, so `/rooms` runs
+> wherever the service does. The commands below still work if you install the
+> package yourself, but they are no longer how the app runs, and there is no
+> longer a `setup.ps1` to bootstrap them.
 
 | Document | What it covers |
 |---|---|
@@ -11,12 +24,19 @@ Notes on how this project is built, what has been verified, and what is left.
 | [roadmap.md](roadmap.md) | What is left, in priority order, with honest cost estimates |
 | [models.md](models.md) | The image-to-3D landscape: what exists, what runs on 4 GB, what needs a rented GPU |
 
+Two more READMEs live next to the code they describe, not here:
+
+| Where | What it covers |
+|---|---|
+| [../frontend/README.md](../frontend/README.md) | **the app**: services, per-user storage, the catalog |
+| [../scripts/modal_app/README.md](../scripts/modal_app/README.md) | Hunyuan3D-2.1 on a rented GPU: setup, flags, costs |
+
 ## The short version
 
 One command turns a room photo into one GLB:
 
 ```powershell
-dreamspace-room --image inputs\bedroom.jpg --decimate 0.2
+dioramic-room --image photos\bedroom.jpg --decimate 0.2
 ```
 
 It detects the objects, reconstructs a mesh for each, estimates where they sit
