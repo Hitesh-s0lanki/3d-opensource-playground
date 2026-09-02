@@ -83,8 +83,9 @@ because the input is a single perspective image.
 Not reconstruction — these invent rooms rather than copying one.
 
 - **SpatialGen** (3DV 2026) — layout + reference image or text → view-consistent
-  3D room. Trained on 12,328 scenes / 57,440 rooms. Arguably a better fit for a
-  product called *dreamspace* than reconstruction is.
+  3D room. Trained on 12,328 scenes / 57,440 rooms. The closest thing to skipping
+  this pipeline outright: it invents a coherent room instead of recovering the
+  one in the photo.
 
 ## Capturing a real space
 
@@ -109,6 +110,13 @@ better generator at all, but **retrieval**: detect the furniture, then match it
 against a CAD library rather than reconstructing it. Generated furniture is
 lumpy and hard to edit; a retrieved model is clean, low-poly, correctly scaled
 and swappable. Reconstruction gets you *layout*; retrieval gets you *quality*.
+
+## Judging them yourself
+
+[notebooks/image_to_3d_eval.ipynb](../notebooks/image_to_3d_eval.ipynb) runs your
+own images through **TripoSR**, **Hunyuan3D 2.0** and **TRELLIS** on a free Colab
+T4, so the comparison above can be checked against your actual furniture rather
+than taken on trust. It needs a GPU this machine does not have — hence Colab.
 
 ## Sources
 

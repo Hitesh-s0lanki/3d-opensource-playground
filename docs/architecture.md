@@ -5,25 +5,25 @@
 ```
 bedroom.jpg
     │
-    │  1. detect      scene/segment.py      GroundingDINO
+    │  1. detect      services/segmentation_service.py   GroundingDINO
     ▼                 open-vocabulary boxes -> padded crops
 crops/*.png
     │
-    │  2. reconstruct backends/triposr.py   one mesh per crop
+    │  2. reconstruct services/backends/triposr.py        one mesh per crop
     ▼                 flat items skip this entirely
 objects/*.glb
     │
-    │  3. layout      scene/layout.py       camera model + size priors
+    │  3. layout      services/layout_service.py         camera model + priors
     ▼                 -> positions in metres
 scene.json
     │
-    │  4. assemble    scene/blender/build_scene.py
+    │  4. assemble    services/blender/build_scene.py
     ▼                 walls, fit, place, export
 bedroom.glb
 ```
 
-Each stage is independently runnable. `dreamspace-generate` is stage 2 alone;
-`dreamspace-assemble` is stage 4 alone. `dreamspace-room` chains all four.
+Each stage is independently runnable. `dioramic-generate` is stage 2 alone;
+`dioramic-assemble` is stage 4 alone. `dioramic-room` chains all four.
 
 ## The two-interpreter split
 
@@ -37,15 +37,15 @@ works inside Blender.
 So the pipeline splits, joined by a file:
 
 ```
-dreamspace (venv 3.10) ──writes──> scene.json ──read by──> Blender (bpy 3.13)
+dioramic (venv 3.10) ──writes──> scene.json ──read by──> Blender (bpy 3.13)
        torch, transformers                            geometry, glTF export
 ```
 
 Consequences worth knowing:
 
-- **`scene/spec.py` is the contract**, not an implementation detail. The
+- **`schemas/scene.py` is the contract**, not an implementation detail. The
   *format* is what both sides agree on; the Blender side re-reads the same
-  JSON with its own parser and must never import `dreamspace`.
+  JSON with its own parser and must never import `dioramic`.
 - **Nothing under `scene/blender/` may import a third-party package.** Standard
   library and `bpy` only.
 - **Everything upstream of the JSON is testable without Blender**, and
@@ -59,7 +59,7 @@ Consequences worth knowing:
 
 ## Conventions
 
-Fixed once in `scene/spec.py` so nothing downstream has to guess:
+Fixed once in `schemas/scene.py` so nothing downstream has to guess:
 
 | | |
 |---|---|
@@ -77,18 +77,18 @@ larger world-axis-aligned box than its `size`, by `w·|cos θ| + d·|sin θ|`.
 
 | Question | Answered in |
 |---|---|
-| What objects are in the picture? | `scene/segment.py` |
-| How big is a wardrobe, really? | `SIZE_PRIORS` in `scene/layout.py` |
-| How far away is it? | `depth_from_height()` + `Camera` in `scene/layout.py` |
-| Which wall does a painting hang on? | `_choose_wall()` in `scene/layout.py` |
+| What objects are in the picture? | `services/segmentation_service.py` |
+| How big is a wardrobe, really? | `SIZE_PRIORS` in `services/layout_service.py` |
+| How far away is it? | `depth_from_height()` + `Camera` in `services/layout_service.py` |
+| Which wall does a painting hang on? | `_choose_wall()` in `services/layout_service.py` |
 | Which way is up for this mesh? | `best_orientation()` in `scene/blender/build_scene.py` |
 | How big should it end up? | the fit block in `place_object()` |
 | Should it be a mesh or a flat panel? | `Prior.flat` -> `ObjectSpec.kind` |
-| Was the reconstruction any good? | `is_usable()` in `scene/room.py` |
+| Was the reconstruction any good? | `is_usable()` in `services/room_service.py` |
 
 ## Extension points
 
-**Adding a 3D backend** — subclass `Backend` in `backends/base.py`, decorate
+**Adding a 3D backend** — subclass `Backend` in `services/backends/base.py`, decorate
 with `@register`, implement `load()` and `generate()`. The registry, the vendor
 cloning, and the OOM retry loop are already there. `--model <name>` picks it.
 
