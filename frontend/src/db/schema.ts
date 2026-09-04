@@ -120,6 +120,22 @@ export const jobs = pgTable(
     /** The run slug this job produces, for the viewer to jump to. */
     runSlug: text("run_slug"),
 
+    /** Held while a poll is asking Modal about this job, so only one is.
+     *
+     * The viewer polls every two seconds and each poll used to collect every
+     * running job unconditionally. That is harmless while the answer is "not
+     * yet" - but the moment the mesh exists, every poll still in flight starts
+     * downloading the same 5-22 MB GLB, and they queue behind each other on
+     * Modal's side. A three-minute generation was being marked done twenty
+     * minutes later, when one of the pile-up finally returned.
+     *
+     * A timestamp rather than a boolean because the holder is a serverless
+     * invocation that can vanish mid-download; anything older than
+     * `POLL_CLAIM_STALE_MS` is treated as abandoned and may be taken over.
+     * Null means nobody holds it.
+     */
+    pollingSince: timestamp("polling_since", { withTimezone: true }),
+
     /** One credit was taken when this job was submitted; this says whether it
      * has since been given back. It is a flag on the job rather than a ledger
      * entry because its only job is to make the refund idempotent - two

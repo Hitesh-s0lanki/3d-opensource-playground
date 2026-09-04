@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "polling_since" timestamp with time zone;

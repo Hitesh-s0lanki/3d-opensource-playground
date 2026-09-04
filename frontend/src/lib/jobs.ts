@@ -19,7 +19,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { getDb } from "@/db";
 import { jobs } from "@/db/schema";
 import { refundCredit, spendCredit } from "./credits";
@@ -102,6 +102,52 @@ function modalOptions(options: Record<string, string>): modal.ModalOptions {
     max_num_view: number("max_num_view"),
     view_resolution: number("view_resolution"),
   };
+}
+
+/** How long one poll may hold a job's collect before another may take over.
+ *
+ * The holder is a serverless invocation, so it can be killed mid-download and
+ * never release the claim. This is the ceiling on how long that wedges a job:
+ * long enough that a legitimately slow transfer is never stolen from,
+ * short enough that a dead instance costs one extra minute rather than a run.
+ */
+const POLL_CLAIM_STALE_MS = 60_000;
+
+/** Take the right to ask Modal about this job, or return null if someone else
+ * already has it.
+ *
+ * The conditional UPDATE is the lock, the same way `creditRefunded` is: two
+ * polls two seconds apart both run this, and only the one that moves
+ * `polling_since` from null-or-stale to now proceeds. Without it, every poll
+ * during a generation started its own collect, and the ones that overlapped
+ * the moment the mesh appeared all downloaded the same GLB at once.
+ *
+ * Returns the timestamp it wrote, which is the receipt `releasePoll` needs so
+ * it cannot release a claim that has since been taken over.
+ */
+async function claimPoll(jobId: string): Promise<Date | null> {
+  const db = getDb();
+  const now = new Date();
+  const [claimed] = await db
+    .update(jobs)
+    .set({ pollingSince: now })
+    .where(
+      and(
+        eq(jobs.id, jobId),
+        or(isNull(jobs.pollingSince), lt(jobs.pollingSince, new Date(now.getTime() - POLL_CLAIM_STALE_MS))),
+      ),
+    )
+    .returning({ id: jobs.id });
+  return claimed ? now : null;
+}
+
+/** Hand the claim back, but only if it is still ours. */
+async function releasePoll(jobId: string, held: Date): Promise<void> {
+  const db = getDb();
+  await db
+    .update(jobs)
+    .set({ pollingSince: null })
+    .where(and(eq(jobs.id, jobId), eq(jobs.pollingSince, held)));
 }
 
 /** Give this job's credit back, at most once.
@@ -236,6 +282,18 @@ export async function advanceJobs(userId: string): Promise<void> {
 }
 
 async function advanceOne(userId: string, row: JobRow): Promise<void> {
+  // Somebody else is already asking about this job; a second answer would be
+  // the same answer, bought with a second multi-megabyte download.
+  const held = await claimPoll(row.id);
+  if (!held) return;
+  try {
+    await collectOne(userId, row);
+  } finally {
+    await releasePoll(row.id, held);
+  }
+}
+
+async function collectOne(userId: string, row: JobRow): Promise<void> {
   const db = getDb();
   let result: modal.ModalResult;
   try {
