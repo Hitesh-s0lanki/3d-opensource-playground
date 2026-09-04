@@ -4,6 +4,7 @@ import { dbConfigured } from "@/db";
 import { errorResponse, requireUserId } from "@/lib/auth";
 import { ROOM_AVAILABLE, jobUnavailableReason } from "@/lib/jobs";
 import { listRuns } from "@/lib/runs";
+import { stylizeUnavailableReason } from "@/lib/stylize";
 import type { Run, RunsPayload } from "@/lib/types";
 
 export async function GET(): Promise<Response> {
@@ -28,6 +29,7 @@ export async function GET(): Promise<Response> {
     const payload: RunsPayload = {
       generate_blocked: blocked,
       room_available: ROOM_AVAILABLE,
+      stylize_blocked: stylizeUnavailableReason(),
       db: { enabled: dbConfigured(), synced },
       runs,
     };
