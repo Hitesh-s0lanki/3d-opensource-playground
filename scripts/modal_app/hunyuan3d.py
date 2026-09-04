@@ -616,16 +616,30 @@ def api():
         )
         options = {key: body[key] for key in allowed if body.get(key) is not None}
 
-        call = Hunyuan3D().generate.spawn(image_bytes, **options)
+        call = await Hunyuan3D().generate.spawn.aio(image_bytes, **options)
         return {"call_id": call.object_id}
 
     @web.get("/result")
     async def result(call_id: str, x_dioramic_token: str | None = Header(default=None)):
         check(x_dioramic_token)
-        handle = modal.FunctionCall.from_id(call_id)
+        handle = await modal.FunctionCall.from_id.aio(call_id)
         try:
             # timeout=0 asks "is it done?" without blocking the request.
-            glb = handle.get(timeout=0)
+            #
+            # `.aio` rather than the blocking form, and it is not a style
+            # preference. This handler runs on one asgi container's event loop,
+            # and the web app polls it every couple of seconds per running job.
+            # The sync interface does its gRPC - and, once the call resolves,
+            # the whole 5-22 MB GLB transfer - on that loop, so every other
+            # request in flight stops dead behind it. Measured: 31 pending polls
+            # answered in ~0.4 s each, then five that returned the finished mesh
+            # in 153-228 s of wall clock against ~1 s of execution. The job is
+            # only marked done when one of those lands, which is how a
+            # three-minute generation was taking twenty.
+            #
+            # asyncio.TimeoutError is the builtin from 3.11 on, so the except
+            # below still catches the pending case unchanged.
+            glb = await handle.get.aio(timeout=0)
         except TimeoutError:
             return JSONResponse({"state": "pending"}, status_code=202)
         except Exception as exc:
@@ -636,7 +650,8 @@ def api():
     @web.post("/cancel")
     async def cancel(call_id: str, x_dioramic_token: str | None = Header(default=None)):
         check(x_dioramic_token)
-        modal.FunctionCall.from_id(call_id).cancel()
+        handle = await modal.FunctionCall.from_id.aio(call_id)
+        await handle.cancel.aio()
         return {"cancelled": True}
 
     return web
