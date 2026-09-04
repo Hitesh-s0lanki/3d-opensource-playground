@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatCount, formatVec } from "@/lib/format";
-import { GlbStage, type StageStats, type StageToggles } from "./three/glb-stage";
+import { GlbStage, type StageStats, type StageToggles } from "@/components/three/glb-stage";
 
 interface StageProps {
   src: string | null;

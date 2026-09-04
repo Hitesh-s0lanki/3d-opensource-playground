@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { formatBytes, timeAgo } from "@/lib/format";
 import type { JobSnapshot, Run } from "@/lib/types";
 import { JobCard } from "./job-card";
-import { Logo } from "./logo";
+import { Logo } from "@/components/logo";
 
 interface RunSidebarProps {
   runs: Run[];
