@@ -1,7 +1,8 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import { shadcn } from "@clerk/ui/themes";
-import type { Metadata } from "next";
-import { Cormorant_Garamond, Geist_Mono, Inter } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { Geist_Mono, Inter, Space_Grotesk } from "next/font/google";
+import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -11,11 +12,16 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
-const cormorant = Cormorant_Garamond({
-  variable: "--font-cormorant",
+/** The display face. A grotesk with drawn-in quirks - the flat-topped `a`,
+ * the squared bowls - which reads as a made thing next to Inter's neutrality,
+ * which is what a page of generated meshes wants. It replaced Cormorant
+ * Garamond: a high-contrast old-style serif is a beautiful face for prose and
+ * the wrong voice entirely for a tool whose subject is geometry. It has no
+ * italic, so the captions that used Cormorant's are upright now. */
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
-  style: ["normal", "italic"],
 });
 
 const geistMono = Geist_Mono({
@@ -37,18 +43,38 @@ export const metadata: Metadata = {
   },
 };
 
+/** `viewportFit: cover` lets the mobile sheets run under the home indicator,
+ * with `pb-safe` giving their controls the inset back. Zoom is deliberately
+ * left enabled - pinching a 10px measurement is a real use of this page. */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#eef0f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#161a24" },
+  ],
+};
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${cormorant.variable} ${geistMono.variable} h-full antialiased`}
-      style={{ colorScheme: "light" }}
+      className={`${inter.variable} ${spaceGrotesk.variable} ${geistMono.variable} antialiased`}
+      suppressHydrationWarning
     >
-      <body className="h-full overflow-hidden">
-        <ClerkProvider appearance={{ theme: shadcn }}>
-          <TooltipProvider>{children}</TooltipProvider>
-          <Toaster position="bottom-right" />
-        </ClerkProvider>
+      {/* The page scrolls. It did not use to: `/` was the studio, which fills
+          the viewport exactly and must never scroll, so the lock lived here on
+          the body. Now `/` is a landing page and the studio is one route among
+          several, so the lock belongs to the thing that needs it - ViewerApp is
+          `h-dvh overflow-hidden`, which is self-contained. */}
+      <body>
+        <ThemeProvider>
+          <ClerkProvider appearance={{ theme: shadcn }}>
+            <TooltipProvider>{children}</TooltipProvider>
+            <Toaster position="bottom-right" />
+          </ClerkProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
