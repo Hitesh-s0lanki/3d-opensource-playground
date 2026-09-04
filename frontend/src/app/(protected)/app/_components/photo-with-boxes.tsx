@@ -32,19 +32,27 @@ export function PhotoWithBoxes({ photo, items, selected, onSelect }: PhotoWithBo
         const width = photo.width!;
         const height = photo.height!;
         const active = item.name === selected;
+        // A box that starts near the top has no room for a label above it, so
+        // that one sits inside the box instead of off the top of the photo.
+        const labelInside = y0 / height < 0.09;
         return (
           <button
             key={item.name}
             type="button"
-            title={`${item.name}${item.score != null ? ` · ${(item.score * 100).toFixed(0)}%` : ""}`}
+            aria-pressed={active}
+            aria-label={`${item.name}${item.label ? `, ${item.label}` : ""}${
+              item.score != null ? `, ${(item.score * 100).toFixed(0)}% confidence` : ""
+            }, ${item.status}`}
             onClick={() => onSelect(active ? null : item.name)}
             className={cn(
-              "absolute rounded-sm border-2 transition-colors",
+              "focus-ring absolute rounded-sm border-2 transition-colors",
               active
                 ? "z-10 border-brand bg-brand/15"
                 : item.status === "dropped"
                   ? "border-danger/80 hover:bg-danger/10"
-                  : "border-box/70 hover:bg-box/10",
+                  : item.status === "orphan"
+                    ? "border-honey/80 hover:bg-honey/10"
+                    : "border-box/70 hover:bg-box/10",
             )}
             style={{
               left: `${(x0 / width) * 100}%`,
@@ -54,8 +62,10 @@ export function PhotoWithBoxes({ photo, items, selected, onSelect }: PhotoWithBo
             }}
           >
             <span
+              aria-hidden
               className={cn(
-                "absolute -top-0.5 left-0 -translate-y-full rounded-sm px-1 py-px text-[10px] font-medium leading-tight text-white",
+                "absolute left-0 max-w-35 truncate rounded-sm px-1 py-px text-[10px] font-medium leading-tight text-white",
+                labelInside ? "top-0" : "-top-0.5 -translate-y-full",
                 active ? "bg-brand" : item.status === "dropped" ? "bg-danger/90" : "bg-box/90",
               )}
             >

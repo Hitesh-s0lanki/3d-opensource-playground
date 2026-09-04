@@ -6,6 +6,10 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Node runs scripts/ directly with type stripping, and a relative TS
+    // import has to carry its extension for that to resolve. Harmless for the
+    // app, which is bundled and never writes one.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
