@@ -61,6 +61,10 @@ export interface RunsPayload {
   generate_blocked: string | null;
   /** The room pipeline has no cloud implementation yet. */
   room_available: boolean;
+  /** Why an upload cannot be re-rendered as a figurine first - OPENAI_API_KEY
+   * unset - or null when it can be. The option is hidden rather than shown
+   * broken, since a run without it still works. */
+  stylize_blocked: string | null;
   /** The Neon catalog: configured at all, and did the last read succeed. */
   db: { enabled: boolean; synced: boolean };
   runs: Run[];
@@ -84,4 +88,31 @@ export interface JobSnapshot {
   returncode: number | null;
   error: string;
   log: string[];
+}
+
+/** What the signed-in user has left to spend. Generating costs one credit;
+ * a failed or cancelled job is refunded. */
+export interface CreditsSnapshot {
+  granted: number;
+  spent: number;
+  /** granted - spent, floored at zero. What the UI counts down. */
+  remaining: number;
+}
+
+/** POST /api/stylize. Nothing is stored server-side: the render comes back
+ * inline and is posted straight back as the job's file if the user takes it. */
+export interface StylizePayload {
+  /** The figurine, as a `data:` URL ready to drop into an `<img>`. */
+  image: string;
+  /** What to call it when it is uploaded as the job's image. */
+  name: string;
+  /** Figurine renders left today, for the hint under the button. */
+  remaining_today: number;
+}
+
+/** GET /api/jobs. The credits ride along with the poll the viewer already
+ * runs, so the balance follows a refund without a second timer. */
+export interface JobsPayload {
+  jobs: JobSnapshot[];
+  credits: CreditsSnapshot;
 }

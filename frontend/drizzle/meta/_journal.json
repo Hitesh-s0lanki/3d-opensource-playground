@@ -8,6 +8,20 @@
       "when": 1788275179510,
       "tag": "0000_user_scoped_blob_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788500276510,
+      "tag": "0001_credits",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788508695661,
+      "tag": "0002_figurine_daily_cap",
+      "breakpoints": true
     }
   ]
 }

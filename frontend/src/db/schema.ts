@@ -16,6 +16,7 @@
 import {
   bigint,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -119,6 +120,13 @@ export const jobs = pgTable(
     /** The run slug this job produces, for the viewer to jump to. */
     runSlug: text("run_slug"),
 
+    /** One credit was taken when this job was submitted; this says whether it
+     * has since been given back. It is a flag on the job rather than a ledger
+     * entry because its only job is to make the refund idempotent - two
+     * overlapping polls can both notice the same job failed, and only the one
+     * that flips this false to true is allowed to pay. */
+    creditRefunded: boolean("credit_refunded").notNull().default(false),
+
     log: jsonb("log").$type<string[]>(),
     queuedAt: timestamp("queued_at", { withTimezone: true }).defaultNow().notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -129,3 +137,37 @@ export const jobs = pgTable(
     index("jobs_user_state").on(table.userId, table.state),
   ],
 );
+
+/** The free allowance. One row per Clerk user, created the first time we look.
+ *
+ * `granted` lives on the row rather than only in code so a top-up is an UPDATE
+ * rather than a migration, and `spent` counts rather than decrements so a
+ * refund can never hand back more than was taken. Remaining is the difference.
+ *
+ * There is no ledger of individual charges: a job row already is the receipt,
+ * and one integer that a single conditional UPDATE can move is what makes
+ * spending safe without a transaction the HTTP driver does not have.
+ */
+export const credits = pgTable("credits", {
+  userId: text("user_id").primaryKey(),
+  granted: integer("granted").notNull().default(5),
+  spent: integer("spent").notNull().default(0),
+
+  /** Figurine renders, which are metered by the day rather than paid for out
+   * of the allowance above.
+   *
+   * They are not generations: one costs a fraction of a GPU minute and the
+   * whole point of the preview is that the user may reject it and ask for
+   * another, so charging a credit would make trying twice cost more than the
+   * mesh does. But they are billed by OpenAI per call and nothing about a
+   * button stops someone holding it down, so the day is the bound.
+   *
+   * The window resets lazily: the count belongs to `stylizedOn`, and a request
+   * dated later simply overwrites both. Nothing has to run at midnight.
+   */
+  stylizedOn: date("stylized_on"),
+  stylizedCount: integer("stylized_count").notNull().default(0),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});

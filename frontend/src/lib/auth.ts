@@ -6,6 +6,7 @@
  */
 
 import { auth } from "@clerk/nextjs/server";
+import { FigurineLimit, OutOfCredits } from "./credits";
 
 export class Unauthorized extends Error {
   constructor() {
@@ -27,10 +28,19 @@ export async function currentUserId(): Promise<string | null> {
   return userId ?? null;
 }
 
-/** Turn a thrown `Unauthorized` into a 401 and anything else into a 500. */
+/** Turn a thrown `Unauthorized` into a 401, a spent allowance into a 402, a
+ * met daily limit into a 429, and anything else into a 500. All three are
+ * answers about the caller rather than about the request, which is why they
+ * are mapped here once instead of in every route that could raise them. */
 export function errorResponse(exc: unknown): Response {
   if (exc instanceof Unauthorized) {
     return Response.json({ error: exc.message }, { status: 401 });
+  }
+  if (exc instanceof OutOfCredits) {
+    return Response.json({ error: exc.message, out_of_credits: true }, { status: 402 });
+  }
+  if (exc instanceof FigurineLimit) {
+    return Response.json({ error: exc.message, limit_reached: true }, { status: 429 });
   }
   const message = exc instanceof Error ? exc.message : String(exc);
   console.error("[api]", message);

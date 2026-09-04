@@ -13,21 +13,23 @@
  * survive a serverless cold start, a redeploy, or the user closing the tab
  * mid-generation. There is also no queue any more: the 4 GB card that forced
  * one-at-a-time is not in the picture, and Modal scales containers itself.
+ *
+ * A job costs one credit, taken at submit and given back if the job never
+ * produces a mesh - see `credits.ts` for why it is charged that way round.
  */
 
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import imageSize from "image-size";
 import { getDb } from "@/db";
 import { jobs } from "@/db/schema";
+import { refundCredit, spendCredit } from "./credits";
+import { type NormalizedImage, normalizeImage } from "./images";
 import * as modal from "./modal";
 import { uniqueSlug, upsertRun } from "./runs";
-import { MAX_UPLOAD, blobConfigured, blobUrl, safeSegment, userKey, writeBlob } from "./storage";
+import { MAX_UPLOAD, blobConfigured, blobUrl, userKey, writeBlob } from "./storage";
 import type { JobKind, JobSnapshot, JobState } from "./types";
 
 type JobRow = typeof jobs.$inferSelect;
-
-const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
 
 const KINDS: Record<JobKind, { label: string }> = {
   object: { label: "image → mesh" },
@@ -54,15 +56,6 @@ export function jobUnavailableReason(kind: JobKind): string | null {
     return "storage is not configured - set BLOB_READ_WRITE_TOKEN";
   }
   return null;
-}
-
-/** An image name that is safe as a blob key segment. */
-export function safeImageName(raw: string): string {
-  const name = safeSegment(raw, "upload");
-  const dot = name.lastIndexOf(".");
-  const suffix = dot > 0 ? name.slice(dot).toLowerCase() : "";
-  if (!IMAGE_EXT.has(suffix)) throw new Error(`not an image: ${raw}`);
-  return name;
 }
 
 function stem(name: string): string {
@@ -111,6 +104,23 @@ function modalOptions(options: Record<string, string>): modal.ModalOptions {
   };
 }
 
+/** Give this job's credit back, at most once.
+ *
+ * The conditional update is the lock. Two overlapping polls can both watch the
+ * same Modal call fail, and both will try to pay; only the one that flips
+ * `credit_refunded` from false to true gets to. */
+async function refundJobCredit(userId: string, jobId: string): Promise<boolean> {
+  const db = getDb();
+  const [flipped] = await db
+    .update(jobs)
+    .set({ creditRefunded: true })
+    .where(and(eq(jobs.id, jobId), eq(jobs.creditRefunded, false)))
+    .returning({ id: jobs.id });
+  if (!flipped) return false;
+  await refundCredit(userId);
+  return true;
+}
+
 /** Upload the photo, insert the row, hand it to Modal. */
 export async function submitJob(
   userId: string,
@@ -128,48 +138,58 @@ export async function submitJob(
   const blocked = jobUnavailableReason(kind);
   if (blocked) throw new Error(blocked);
 
+  // Charged before the photo is decoded or stored, so a user with nothing left
+  // is turned away in milliseconds rather than after a 12-megapixel HEIC has
+  // been converted and uploaded. Everything from here to the insert is
+  // wrapped, because a credit taken for a job that never existed is a credit
+  // the user can never spend or see.
+  const balance = await spendCredit(userId);
+
+  // Decoded and re-encoded here, before anything is stored, so the browser
+  // showing the photo back and Pillow opening it on Modal are looking at the
+  // same bytes in a format they both read. `image` from here on is the
+  // normalised upload, never what arrived.
   const db = getDb();
-  const imageName = safeImageName(filename);
-  const slug = await uniqueSlug(userId, stem(imageName));
-
-  const stored = await writeBlob(
-    userKey(userId, slug, imageName),
-    data,
-    contentTypeFor(imageName),
-  );
-
-  // Measured here, on bytes already in memory, rather than by fetching the
-  // photo back when the job finishes.
-  let width: number | null = null;
-  let height: number | null = null;
+  let row: JobRow;
+  let image: NormalizedImage;
   try {
-    const probed = imageSize(new Uint8Array(data));
-    width = probed.width ?? null;
-    height = probed.height ?? null;
-  } catch {
-    // Dimensions decorate the detail panel; not worth failing an upload for.
+    image = await normalizeImage(filename, data);
+    const slug = await uniqueSlug(userId, stem(image.name));
+
+    const stored = await writeBlob(
+      userKey(userId, slug, image.name),
+      image.data,
+      image.contentType,
+    );
+
+    const uploaded = `uploaded ${image.name} (${Math.round(image.data.length / 1e3)} kB)`;
+    const charged = `1 credit spent · ${balance.remaining} of ${balance.granted} left`;
+
+    [row] = await db
+      .insert(jobs)
+      .values({
+        userId,
+        kind,
+        state: "queued",
+        stage: "uploading",
+        options,
+        imageKey: stored.key,
+        imageName: image.name,
+        imageBytes: stored.bytes,
+        imageWidth: image.width,
+        imageHeight: image.height,
+        runSlug: slug,
+        log: image.note ? [uploaded, image.note, charged] : [uploaded, charged],
+      })
+      .returning();
+  } catch (exc) {
+    // No job row means nothing will ever refund this one later.
+    await refundCredit(userId);
+    throw exc;
   }
 
-  const [row] = await db
-    .insert(jobs)
-    .values({
-      userId,
-      kind,
-      state: "queued",
-      stage: "uploading",
-      options,
-      imageKey: stored.key,
-      imageName,
-      imageBytes: stored.bytes,
-      imageWidth: width,
-      imageHeight: height,
-      runSlug: slug,
-      log: [`uploaded ${imageName} (${Math.round(data.length / 1e3)} kB)`],
-    })
-    .returning();
-
   try {
-    const callId = await modal.submit(data, modalOptions(options));
+    const callId = await modal.submit(image.data, modalOptions(options));
     const [running] = await db
       .update(jobs)
       .set({
@@ -184,6 +204,7 @@ export async function submitJob(
     return snapshot(running);
   } catch (exc) {
     const message = exc instanceof Error ? exc.message : String(exc);
+    const refunded = await refundJobCredit(userId, row.id);
     const [failed] = await db
       .update(jobs)
       .set({
@@ -191,21 +212,12 @@ export async function submitJob(
         stage: "",
         error: message,
         finishedAt: new Date(),
-        log: [...(row.log ?? []), message],
+        log: [...(row.log ?? []), message, ...(refunded ? ["credit refunded"] : [])],
       })
       .where(eq(jobs.id, row.id))
       .returning();
     return snapshot(failed);
   }
-}
-
-function contentTypeFor(name: string): string {
-  const suffix = name.slice(name.lastIndexOf(".")).toLowerCase();
-  return (
-    { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".bmp": "image/bmp" }[
-      suffix
-    ] ?? "application/octet-stream"
-  );
 }
 
 /** Poll Modal for every running job of this user and finish the ones that are
@@ -235,6 +247,8 @@ async function advanceOne(userId: string, row: JobRow): Promise<void> {
   if (result.state === "pending") return;
 
   if (result.state === "failed") {
+    // The GPU ran and gave nothing back, so the credit goes back too.
+    const refunded = await refundJobCredit(userId, row.id);
     await db
       .update(jobs)
       .set({
@@ -243,7 +257,7 @@ async function advanceOne(userId: string, row: JobRow): Promise<void> {
         error: result.error,
         finishedAt: new Date(),
         modalCallId: null,
-        log: [...(row.log ?? []), result.error],
+        log: [...(row.log ?? []), result.error, ...(refunded ? ["credit refunded"] : [])],
       })
       .where(eq(jobs.id, row.id));
     return;
@@ -288,7 +302,10 @@ async function advanceOne(userId: string, row: JobRow): Promise<void> {
       })
       .where(eq(jobs.id, row.id));
   } catch (exc) {
+    // The mesh existed for a moment but the user will never see it; on our
+    // side of the line, so they are not charged for it.
     const message = exc instanceof Error ? exc.message : String(exc);
+    const refunded = await refundJobCredit(userId, row.id);
     await db
       .update(jobs)
       .set({
@@ -297,7 +314,7 @@ async function advanceOne(userId: string, row: JobRow): Promise<void> {
         error: `generated, but storing it failed: ${message}`,
         finishedAt: new Date(),
         modalCallId: null,
-        log: [...(row.log ?? []), message],
+        log: [...(row.log ?? []), message, ...(refunded ? ["credit refunded"] : [])],
       })
       .where(eq(jobs.id, row.id));
   }
@@ -325,6 +342,7 @@ export async function cancelJob(userId: string, jobId: string): Promise<boolean>
   if (!row || ["done", "failed", "cancelled"].includes(row.state)) return false;
 
   if (row.modalCallId) await modal.cancel(row.modalCallId);
+  const refunded = await refundJobCredit(userId, row.id);
   await db
     .update(jobs)
     .set({
@@ -332,7 +350,7 @@ export async function cancelJob(userId: string, jobId: string): Promise<boolean>
       stage: "",
       finishedAt: new Date(),
       modalCallId: null,
-      log: [...(row.log ?? []), "cancelled"],
+      log: [...(row.log ?? []), "cancelled", ...(refunded ? ["credit refunded"] : [])],
     })
     .where(eq(jobs.id, row.id));
   return true;
