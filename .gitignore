@@ -23,6 +23,16 @@ vendor/
 
 # --- model and mesh binaries ------------------------------------------------
 *.glb
+
+# ...except the meshes the landing page ships. These are site assets, not build
+# output: the showcase loads them in the browser, so they have to be in the
+# deploy. Listed one by one rather than by folder so that a mesh dropped into
+# `public/` while working stays ignored - the rule above is what keeps 20 MB of
+# generated output from being committed by reflex, and it should keep working.
+!frontend/public/showcase/raphael.glb
+!frontend/public/showcase/orc-bust.glb
+!frontend/public/showcase/doraemon.glb
+!frontend/public/samples/tin-robot.glb
 *.obj
 *.ckpt
 *.safetensors
